@@ -2,6 +2,7 @@
 
 Defensa en múltiples capas: clasificación, separación de mensajes, allowlist, policy engine, pruebas adversariales.
 """
+
 from __future__ import annotations
 
 import re
@@ -71,18 +72,24 @@ def classify_content(text: str, metadata: dict[str, Any] | None = None) -> dict[
     # heurística: si contiene marcadores de sección normativa (ej: "Política", "§", "Artículo") es más confiable
     normative_markers = ["política", "policy", "artículo", "section", "§", "normativa"]
     lower = text.lower()
-    is_normative = any(m.lower() in lower for m in normative_markers) and not injection["is_malicious"]
+    is_normative = (
+        any(m.lower() in lower for m in normative_markers) and not injection["is_malicious"]
+    )
 
     return {
         "is_malicious": injection["is_malicious"],
         "is_normative": is_normative,
         "injection": injection,
-        "reliability": "untrusted" if injection["is_malicious"] else ("high" if is_normative else "medium"),
+        "reliability": "untrusted"
+        if injection["is_malicious"]
+        else ("high" if is_normative else "medium"),
         "flags": injection["flags"],
     }
 
 
-def check_obsolescence(valid_from: datetime, valid_to: datetime | None, now: datetime | None = None) -> dict[str, Any]:
+def check_obsolescence(
+    valid_from: datetime, valid_to: datetime | None, now: datetime | None = None
+) -> dict[str, Any]:
     now = now or datetime.now(UTC)
     is_expired = valid_to is not None and valid_to < now
     is_future = valid_from > now
@@ -127,7 +134,13 @@ def detect_conflict(policies: list[dict[str, Any]]) -> dict[str, Any]:
             else:
                 values.add(str(rules))
         if len(values) > 1:
-            conflicts.append({"key": key, "policies": [p.get("document_id") or p.get("policy_id") for p in group], "values": list(values)})
+            conflicts.append(
+                {
+                    "key": key,
+                    "policies": [p.get("document_id") or p.get("policy_id") for p in group],
+                    "values": list(values),
+                }
+            )
 
     return {
         "has_conflict": len(conflicts) > 0,

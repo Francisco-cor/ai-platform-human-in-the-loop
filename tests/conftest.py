@@ -55,6 +55,41 @@ def db_session():
         session.close()
 
 
+@pytest.fixture(autouse=True)
+def _reset_gateway_global():
+    # Fase 5: limpiar idempotency global entre tests para evitar contaminación
+    try:
+        from procurement_platform.tools.gateway import _GLOBAL_CALL_LOG, _GLOBAL_IDEMPOTENCY
+
+        _GLOBAL_IDEMPOTENCY.clear()
+        _GLOBAL_CALL_LOG.clear()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.workflows.orchestrator import _execution_locks
+
+        _execution_locks.clear()
+    except Exception:
+        pass
+    # Fase 7: rate limiter
+    try:
+        from procurement_platform.security.rate_limiter import reset_rate_limiter
+
+        reset_rate_limiter()
+    except Exception:
+        pass
+    # Fase 7: clear RAG service
+    try:
+        from procurement_platform.workflows.orchestrator import get_rag_service
+
+        svc = get_rag_service()
+        if svc:
+            svc.clear()
+    except Exception:
+        pass
+    yield
+
+
 @pytest.fixture()
 def client():
     from procurement_platform.api.main import app

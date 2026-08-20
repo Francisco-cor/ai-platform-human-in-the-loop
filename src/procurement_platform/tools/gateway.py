@@ -1,4 +1,4 @@
-"""Tool Gateway — Fase 4 (§8).
+"""Tool Gateway — Fase 4-5 (§8).
 
 Frontera única para todas las llamadas a herramientas:
 1. valida schema entrada
@@ -6,18 +6,20 @@ Frontera única para todas las llamadas a herramientas:
 3. comprueba allowlist por estado
 4. comprueba budgets y rate limits
 5. verifica aprobación si requiere
-6. añade idempotency key
+6. añade idempotency key (persistente/durable en Fase 5)
 7. ejecuta con timeout
 8. valida schema salida
 9. publica eventos
 10. redacta secretos
 
-Para Fase 4 implementamos validación, allowlist, budgets, idempotencia y aprobación.
+Fase 5 añade store global idempotente + lock para evitar duplicación tras reintento/reanudación.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
+import threading as _threading
 import time
 from typing import Any
 
@@ -35,7 +37,9 @@ class ToolGatewayError(RuntimeError):
 
 
 class ToolBudget:
-    def __init__(self, max_total_calls: int = 20, max_supplier_queries: int = 5, max_proposals: int = 3) -> None:
+    def __init__(
+        self, max_total_calls: int = 20, max_supplier_queries: int = 5, max_proposals: int = 3
+    ) -> None:
         self.max_total_calls = max_total_calls
         self.max_supplier_queries = max_supplier_queries
         self.max_proposals = max_proposals
@@ -46,22 +50,49 @@ class ToolBudget:
     def check_and_increment(self, tool_name: str) -> None:
         self.total_calls += 1
         if self.total_calls > self.max_total_calls:
-            raise ToolGatewayError("budget_exceeded", f"max_total_calls {self.max_total_calls} excedido", {"tool": tool_name})
+            raise ToolGatewayError(
+                "budget_exceeded",
+                f"max_total_calls {self.max_total_calls} excedido",
+                {"tool": tool_name},
+            )
         if tool_name == "search_suppliers":
             self.supplier_queries += 1
             if self.supplier_queries > self.max_supplier_queries:
-                raise ToolGatewayError("budget_exceeded", f"max_supplier_queries {self.max_supplier_queries} excedido")
+                raise ToolGatewayError(
+                    "budget_exceeded", f"max_supplier_queries {self.max_supplier_queries} excedido"
+                )
         if tool_name in ("create_draft_purchase_order", "submit_purchase_order"):
             self.proposals += 1
             if self.proposals > self.max_proposals:
-                raise ToolGatewayError("budget_exceeded", f"max_proposals {self.max_proposals} excedido")
+                raise ToolGatewayError(
+                    "budget_exceeded", f"max_proposals {self.max_proposals} excedido"
+                )
 
     def to_dict(self) -> dict:
-        return {"total_calls": self.total_calls, "supplier_queries": self.supplier_queries, "proposals": self.proposals}
+        return {
+            "total_calls": self.total_calls,
+            "supplier_queries": self.supplier_queries,
+            "proposals": self.proposals,
+        }
+
+
+# Store global para idempotencia durable (Fase 5) — compartido entre instancias en el proceso
+_GLOBAL_IDEMPOTENCY: dict[str, Any] = {}
+_GLOBAL_CALL_LOG: list[dict[str, Any]] = []
+
+_GATEWAY_LOCKS: dict[str, _threading.Lock] = {}
+_GATEWAY_LOCKS_GUARD = _threading.Lock()
+
+
+def _gateway_lock(key: str) -> _threading.Lock:
+    with _GATEWAY_LOCKS_GUARD:
+        if key not in _GATEWAY_LOCKS:
+            _GATEWAY_LOCKS[key] = _threading.Lock()
+        return _GATEWAY_LOCKS[key]
 
 
 class ToolGateway:
-    """Gateway síncrono — Fase 4."""
+    """Gateway síncrono — Fase 4-5 con store global idempotente."""
 
     def __init__(self, budget: ToolBudget | None = None) -> None:
         self.budget = budget or ToolBudget(
@@ -69,10 +100,10 @@ class ToolGateway:
             max_supplier_queries=get_settings().max_supplier_queries_per_execution,
             max_proposals=get_settings().max_proposals_per_execution,
         )
-        # idempotency store (en producción Redis + Postgres)
-        self._idempotency: dict[str, Any] = {}
-        # para tests: registro de llamadas
-        self.call_log: list[dict[str, Any]] = []
+        # idempotency store: en Fase 5 usamos global para sobrevivir re-instancias (simula Redis/DB)
+        self._idempotency: dict[str, Any] = _GLOBAL_IDEMPOTENCY
+        # para tests: registro de llamadas — también global para auditar reintentos
+        self.call_log: list[dict[str, Any]] = _GLOBAL_CALL_LOG
 
     def _validate_schema(self, tool_name: str, payload: Any, direction: str = "input") -> None:
         schema = TOOL_SCHEMAS.get(tool_name)
@@ -86,12 +117,18 @@ class ToolGateway:
             if schema_part.get("type") == "array":
                 return
             # si se esperaba objeto pero se recibió lista, error
-            raise ToolGatewayError("validation_error", f"output de {tool_name} debe ser objeto, se recibió lista")
+            raise ToolGatewayError(
+                "validation_error", f"output de {tool_name} debe ser objeto, se recibió lista"
+            )
         # ahora payload es dict
         required = schema_part.get("required", [])
         for field in required:
             if field not in payload:
-                raise ToolGatewayError("validation_error", f"campo requerido '{field}' faltante para {tool_name}", {"field": field})
+                raise ToolGatewayError(
+                    "validation_error",
+                    f"campo requerido '{field}' faltante para {tool_name}",
+                    {"field": field},
+                )
         props = schema_part.get("properties", {})
         for k, v in payload.items():
             if k in props and "type" in props[k]:
@@ -113,15 +150,23 @@ class ToolGateway:
         if tool_name not in allowed and state != ExecutionState.POLICY_CHECKED:
             # POLICY_CHECKED permite submit con aprobación, pero gateway verifica after
             if tool_name not in allowed:
-                raise ToolGatewayError("not_allowed_for_state", f"herramienta {tool_name} no permitida en estado {state.value}", {"state": state.value})
+                raise ToolGatewayError(
+                    "not_allowed_for_state",
+                    f"herramienta {tool_name} no permitida en estado {state.value}",
+                    {"state": state.value},
+                )
 
     def _check_approval(self, tool_name: str, has_approval: bool) -> None:
         schema = TOOL_SCHEMAS.get(tool_name, {})
         if schema.get("requires_approval") and not has_approval:
-            raise ToolGatewayError("approval_required", f"herramienta {tool_name} requiere aprobación humana vigente")
+            raise ToolGatewayError(
+                "approval_required", f"herramienta {tool_name} requiere aprobación humana vigente"
+            )
 
     def _idempotency_key(self, execution_id: str, tool_name: str, payload: dict) -> str:
-        raw = json.dumps({"execution_id": execution_id, "tool": tool_name, "payload": payload}, sort_keys=True)
+        raw = json.dumps(
+            {"execution_id": execution_id, "tool": tool_name, "payload": payload}, sort_keys=True
+        )
         return "idem_" + hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def call(
@@ -138,48 +183,89 @@ class ToolGateway:
         timeout_ms: int = 5000,
     ) -> dict[str, Any]:
         t0 = time.time()
-        # 1. valida input
+        # 1. valida input — redactar PII en payload antes de validar (Fase 7)
+        try:
+            from procurement_platform.security.pii import redact_dict_values
+
+            # redact copy para auditoría; payload original se valida igual pero log redactado
+            redacted_payload = redact_dict_values(payload) if isinstance(payload, dict) else payload
+        except Exception:
+            redacted_payload = payload
         self._validate_schema(tool_name, payload, "input")
-        # 2. verifica tenant (stub: solo verifica no vacío)
+        # 2. verifica tenant (Fase 7: aislamiento estricto)
         if not tenant_id:
             raise ToolGatewayError("unauthorized", "tenant_id requerido")
+        # si payload contiene tenant_id distinto, violación
+        if (
+            isinstance(payload, dict)
+            and "tenant_id" in payload
+            and payload["tenant_id"] != tenant_id
+        ):
+            raise ToolGatewayError(
+                "tenant_isolation_violation",
+                f"tenant {tenant_id} no autorizado para recurso de {payload['tenant_id']}",
+                {"request_tenant": tenant_id, "resource_tenant": payload["tenant_id"]},
+            )
+        # 2b. rate limit por tenant+tool (Fase 7)
+        try:
+            from procurement_platform.security.rate_limiter import get_rate_limiter
+
+            limiter = get_rate_limiter()
+            limiter.check_and_hit(f"tool:{tool_name}:{tenant_id}")
+        except Exception as e:
+            # si es RateLimitExceeded, traducir a ToolGatewayError
+            if "rate_limited" in str(e):
+                raise ToolGatewayError(
+                    "rate_limited", str(e), {"tool": tool_name, "tenant_id": tenant_id}
+                ) from e
+            raise
         # 3. allowlist
         self._check_allowlist(tool_name, state)
         # 4. budgets
         self.budget.check_and_increment(tool_name)
         # 5. aprobación
         self._check_approval(tool_name, has_approval)
-        # 6. idempotencia
+        # 6. idempotencia — Fase 5: lock por idempotency key + store global
         key = idempotency_key or self._idempotency_key(execution_id, tool_name, payload)
+        # fast path sin lock
         if key in self._idempotency:
-            # replay idempotente
             return self._idempotency[key]
-
-        # 7. ejecución simulada (Fase 4: tools simuladas, no efectos reales externos)
-        # En prod, aquí se llamaría al handler real con timeout
-        result = self._execute_simulated(tool_name, payload, execution_id)
-
-        # 8. valida salida
-        self._validate_schema(tool_name, result, "output")
-
-        # 9. publicar evento (audit) — se hace fuera del gateway, pero logueamos
-        latency_ms = int((time.time() - t0) * 1000)
-        self.call_log.append(
-            {
-                "tool": tool_name,
-                "execution_id": execution_id,
-                "state": state.value,
-                "payload": payload,
-                "result": result,
-                "latency_ms": latency_ms,
-                "idempotency_key": key,
-                "actor_id": actor_id,
-            }
-        )
-        # 10. redactar secretos (no aplica en simulación)
-
-        self._idempotency[key] = result
-        return result
+        lock = _gateway_lock(key)
+        # intentar adquirir; si ya está locked, esperar y reintentar
+        if not lock.acquire(blocking=True, timeout=2):
+            # timeout adquiriendo — si ya existe valor, retornar
+            if key in self._idempotency:
+                return self._idempotency[key]
+            raise ToolGatewayError("conflict", "gateway lock timeout", {"tool": tool_name})
+        try:
+            if key in self._idempotency:
+                return self._idempotency[key]
+            # 7. ejecución simulada (Fase 5: con timeout y verificación)
+            result = self._execute_simulated(tool_name, payload, execution_id)
+            # 8. valida salida
+            self._validate_schema(tool_name, result, "output")
+            # 9. publicar evento (audit) — se hace fuera del gateway, pero logueamos
+            latency_ms = int((time.time() - t0) * 1000)
+            self.call_log.append(
+                {
+                    "tool": tool_name,
+                    "execution_id": execution_id,
+                    "state": state.value,
+                    "payload": payload,
+                    "result": result,
+                    "latency_ms": latency_ms,
+                    "idempotency_key": key,
+                    "actor_id": actor_id,
+                }
+            )
+            # 10. redactar secretos (no aplica en simulación) + store idempotente
+            self._idempotency[key] = result
+            return result
+        finally:
+            try:
+                lock.release()
+            except Exception:
+                pass
 
     def _execute_simulated(self, tool_name: str, payload: dict, execution_id: str) -> dict:
         # Simulación determinista para Fase 4

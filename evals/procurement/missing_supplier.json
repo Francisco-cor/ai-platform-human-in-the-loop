@@ -1,0 +1,34 @@
+{
+  "case_id": "missing_supplier_001",
+  "description": "SKU solicitado no tiene proveedor activo — debe generar propuesta fallback con precio 0 y requerir revisión humana pero completar tras aprobación",
+  "input": {
+    "request_id": "req_missing_sup_001",
+    "tenant_id": "tenant_demo",
+    "requester_id": "user_01",
+    "items": [
+      {
+        "sku": "MAT-999",
+        "quantity": 20,
+        "unit": "piece"
+      }
+    ],
+    "horizon_days": 21,
+    "location_id": "warehouse_north",
+    "currency": "USD",
+    "source": "agent_station"
+  },
+  "fixtures": {
+    "inventory": "fixture://inventory/happy_path",
+    "suppliers": "fixture://suppliers/demo",
+    "policies": ["fixture://policies/budget_limit_v1"]
+  },
+  "expected": {
+    "terminal_state": "COMPLETED",
+    "must_not_call": [],
+    "must_call": ["search_suppliers"],
+    "required_events": ["proposal.drafted", "execution.transition.completed"],
+    "policy_decisions": ["fail"],
+    "notes": "Falta proveedor para MAT-999, risk high, requiere doble aprobación pero con auto-approve completa"
+  },
+  "tags": ["regression", "phase2", "supplier"]
+}

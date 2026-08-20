@@ -16,9 +16,19 @@ from procurement_platform.policies.engine import (
 )
 
 
-def make_proposal(total=100, currency="USD", supplier_id="supplier_demo", lines=None, qty=10) -> Proposal:
+def make_proposal(
+    total=100, currency="USD", supplier_id="supplier_demo", lines=None, qty=10
+) -> Proposal:
     if lines is None:
-        lines = [ProposalLine(sku="MAT-001", quantity=qty, unit="piece", unit_price=total / qty if qty else 10, currency=currency)]
+        lines = [
+            ProposalLine(
+                sku="MAT-001",
+                quantity=qty,
+                unit="piece",
+                unit_price=total / qty if qty else 10,
+                currency=currency,
+            )
+        ]
     return Proposal(
         proposal_id="prop_test",
         request_id="req_test",
@@ -35,23 +45,55 @@ def make_proposal(total=100, currency="USD", supplier_id="supplier_demo", lines=
 
 
 def test_quantity_non_negative():
-    assert check_quantity_non_negative([ProposalLine(sku="A", quantity=1, unit="piece", unit_price=1)]).decision == "pass"
-    res = check_quantity_non_negative([ProposalLine(sku="A", quantity=0, unit="piece", unit_price=1)])
+    assert (
+        check_quantity_non_negative(
+            [ProposalLine(sku="A", quantity=1, unit="piece", unit_price=1)]
+        ).decision
+        == "pass"
+    )
+    res = check_quantity_non_negative(
+        [ProposalLine(sku="A", quantity=0, unit="piece", unit_price=1)]
+    )
     assert res.decision == "fail" and res.blocking
 
 
 def test_unit_supported():
-    res = check_unit_supported([ProposalLine(sku="A", quantity=1, unit="piece", unit_price=1)], {"piece", "box"})
+    res = check_unit_supported(
+        [ProposalLine(sku="A", quantity=1, unit="piece", unit_price=1)], {"piece", "box"}
+    )
     assert res.decision == "pass"
-    res2 = check_unit_supported([ProposalLine(sku="A", quantity=1, unit="invalid", unit_price=1)], {"piece"})
+    res2 = check_unit_supported(
+        [ProposalLine(sku="A", quantity=1, unit="invalid", unit_price=1)], {"piece"}
+    )
     assert res2.decision == "fail"
 
 
 def test_currency():
-    assert check_currency([ProposalLine(sku="A", quantity=1, unit="piece", unit_price=1, currency="USD")], "USD", {"USD"}).decision == "pass"
-    assert check_currency([ProposalLine(sku="A", quantity=1, unit="piece", unit_price=1, currency="USD")], "EUR", {"USD"}).decision == "fail"
+    assert (
+        check_currency(
+            [ProposalLine(sku="A", quantity=1, unit="piece", unit_price=1, currency="USD")],
+            "USD",
+            {"USD"},
+        ).decision
+        == "pass"
+    )
+    assert (
+        check_currency(
+            [ProposalLine(sku="A", quantity=1, unit="piece", unit_price=1, currency="USD")],
+            "EUR",
+            {"USD"},
+        ).decision
+        == "fail"
+    )
     # line currency mismatch
-    assert check_currency([ProposalLine(sku="A", quantity=1, unit="piece", unit_price=1, currency="EUR")], "USD", {"USD", "EUR"}).decision == "fail"
+    assert (
+        check_currency(
+            [ProposalLine(sku="A", quantity=1, unit="piece", unit_price=1, currency="EUR")],
+            "USD",
+            {"USD", "EUR"},
+        ).decision
+        == "fail"
+    )
 
 
 def test_supplier_active():
@@ -99,7 +141,9 @@ def test_price_freshness():
 def test_run_policy_checks_integration():
     prop = make_proposal(total=5000, supplier_id="supplier_demo", qty=10)
     cfg = PolicyConfig(budget_limits={("tenant_demo", "*"): 1000})
-    checks = run_policy_checks(proposal=prop, config=cfg, active_suppliers={"supplier_demo"}, existing_order_hashes=set())
+    checks = run_policy_checks(
+        proposal=prop, config=cfg, active_suppliers={"supplier_demo"}, existing_order_hashes=set()
+    )
     # budget should fail
     assert any(c.policy_id == "budget_limit" and c.decision == "fail" for c in checks)
     assert has_blocking_failure(checks)

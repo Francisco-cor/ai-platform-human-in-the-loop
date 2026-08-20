@@ -9,7 +9,9 @@ from procurement_platform.integrations.agent_station.fake import FakeAgentStatio
 @pytest.mark.asyncio
 async def test_fake_records_callback():
     fake = FakeAgentStation()
-    payload = ExecutionUpdateCallbackDTO(execution_id="exec_123", request_id="req_123", tenant_id="tenant_demo", status="COMPLETED")
+    payload = ExecutionUpdateCallbackDTO(
+        execution_id="exec_123", request_id="req_123", tenant_id="tenant_demo", status="COMPLETED"
+    )
     status = await fake.receive_callback(payload)
     assert status == 200
     assert fake.was_notified("exec_123")
@@ -18,9 +20,16 @@ async def test_fake_records_callback():
 
 @pytest.mark.asyncio
 async def test_client_callback_disabled():
-    settings = Settings(_env_file=None, PROCUREMENT_APP_ENV="ci", AGENT_STATION_CALLBACK_ENABLED=False, AGENT_STATION_BASE_URL="http://localhost:8001")  # type: ignore
+    settings = Settings(
+        _env_file=None,
+        PROCUREMENT_APP_ENV="ci",
+        AGENT_STATION_CALLBACK_ENABLED=False,
+        AGENT_STATION_BASE_URL="http://localhost:8001",
+    )  # type: ignore
     client = AgentStationClient(settings=settings)
-    payload = ExecutionUpdateCallbackDTO(execution_id="exec_1", request_id="req_1", tenant_id="tenant_demo", status="COMPLETED")
+    payload = ExecutionUpdateCallbackDTO(
+        execution_id="exec_1", request_id="req_1", tenant_id="tenant_demo", status="COMPLETED"
+    )
     result = await client.notify_execution_update(payload)
     assert result is False
     await client.close()

@@ -1,4 +1,5 @@
 """Audit service — append-only logical events (Fase 1)."""
+
 from __future__ import annotations
 
 import hashlib
@@ -32,6 +33,14 @@ def create_audit_event(
     trace_id: str | None = None,
     details: dict | None = None,
 ) -> AuditEvent:
+    # Fase 7: redactar PII en details antes de persistir
+    try:
+        if details:
+            from procurement_platform.security.pii import redact_dict_values
+
+            details = redact_dict_values(details)
+    except Exception:
+        pass
     event = AuditEvent(
         event_id=new_id("evt"),
         execution_id=execution_id,

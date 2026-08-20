@@ -23,7 +23,9 @@ def test_create_and_advance():
     assert exec_obj.proposal is not None
     assert exec_obj.approval_request is not None
     # approve and complete
-    exec_obj = orch.approve_and_complete(db, exec_obj.execution_id, decided_by="approver_01", trace_id="trace_123")
+    exec_obj = orch.approve_and_complete(
+        db, exec_obj.execution_id, decided_by="approver_01", trace_id="trace_123"
+    )
     assert exec_obj.status == ExecutionState.COMPLETED
     db.close()
 

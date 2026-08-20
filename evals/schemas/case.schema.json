@@ -1,23 +1,55 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Evaluation Case",
+  "title": "Evaluation Case — Fase 6",
   "type": "object",
   "required": ["case_id", "description", "input", "expected"],
   "properties": {
-    "case_id": { "type": "string" },
+    "case_id": { "type": "string", "description": "Identificador único, ej. happy_path_001" },
     "description": { "type": "string" },
-    "input": { "type": "object" },
-    "fixtures": { "type": "object" },
+    "input": {
+      "type": "object",
+      "description": "Payload POST /v1/procurement/executions",
+      "properties": {
+        "request_id": { "type": "string" },
+        "tenant_id": { "type": "string" },
+        "requester_id": { "type": "string" },
+        "raw_intent": { "type": "string" },
+        "items": { "type": "array" },
+        "horizon_days": { "type": "integer" },
+        "location_id": { "type": "string" },
+        "currency": { "type": "string" },
+        "source": { "type": "string" }
+      }
+    },
+    "fixtures": {
+      "type": "object",
+      "description": "Referencias a fixtures deterministas",
+      "properties": {
+        "inventory": { "type": "string" },
+        "open_orders": { "type": "string" },
+        "suppliers": { "type": "string" },
+        "policies": { "type": "array", "items": { "type": "string" } },
+        "documents": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "expected": {
       "type": "object",
       "required": ["terminal_state"],
       "properties": {
-        "terminal_state": { "type": "string" },
-        "must_not_call": { "type": "array", "items": { "type": "string" } },
-        "required_events": { "type": "array", "items": { "type": "string" } },
-        "policy_decisions": { "type": "array", "items": { "type": "string" } }
+        "terminal_state": { "type": "string", "description": "Estado terminal esperado (COMPLETED, BLOCKED, FAILED_RETRYABLE, EXPIRED, NEEDS_CLARIFICATION, REJECTED, etc.)" },
+        "must_not_call": { "type": "array", "items": { "type": "string" }, "description": "Tools que no deben ser llamadas" },
+        "must_call": { "type": "array", "items": { "type": "string" }, "description": "Tools que deben ser llamadas al menos una vez" },
+        "required_events": { "type": "array", "items": { "type": "string" }, "description": "Substrings de event_type que deben aparecer" },
+        "forbidden_events": { "type": "array", "items": { "type": "string" } },
+        "policy_decisions": { "type": "array", "items": { "type": "string" }, "description": "pass|fail|needs_review esperados" },
+        "max_latency_s": { "type": "number" },
+        "max_cost_usd": { "type": "number" },
+        "max_tokens": { "type": "integer" },
+        "notes": { "type": "string" }
       }
     },
-    "tags": { "type": "array", "items": { "type": "string" } }
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "seed": { "type": "integer", "description": "Seed para reproducibilidad" },
+    "version": { "type": "string" }
   }
 }

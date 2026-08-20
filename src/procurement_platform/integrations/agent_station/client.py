@@ -2,6 +2,7 @@
 
 Solo depende de DTOs externos y de la configuración; nunca de modelos internos ni de DB.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -117,7 +118,9 @@ class AgentStationClient:
         for attempt in range(self.MAX_RETRIES + 1):
             try:
                 client = self._get_client()
-                resp = await client.post("/v1/callbacks/execution-update", content=body, headers=headers)
+                resp = await client.post(
+                    "/v1/callbacks/execution-update", content=body, headers=headers
+                )
                 if resp.status_code in self.RETRYABLE_STATUS:
                     last_exc = RuntimeError(f"retryable {resp.status_code}: {resp.text[:500]}")
                     self._breaker.record_failure()

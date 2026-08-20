@@ -81,7 +81,17 @@ def test_inventory_crud():
     # verify unique index: duplicate should fail
     from sqlalchemy.exc import IntegrityError
 
-    dup = InventoryItem(id="inv_dup", tenant_id="tenant_demo", sku="MAT-001", location_id="warehouse_north", on_hand=10, reserved=0, in_transit=0, unit="piece", updated_at=datetime.now(UTC))
+    dup = InventoryItem(
+        id="inv_dup",
+        tenant_id="tenant_demo",
+        sku="MAT-001",
+        location_id="warehouse_north",
+        on_hand=10,
+        reserved=0,
+        in_transit=0,
+        unit="piece",
+        updated_at=datetime.now(UTC),
+    )
     db.add(dup)
     try:
         db.commit()
@@ -97,15 +107,42 @@ def test_purchase_order_duplicate_detection_via_db():
     db = SessionLocal()
     db.query(PurchaseOrder).delete()
     db.commit()
-    po = PurchaseOrder(order_id="po_dup_test", tenant_id="tenant_demo", sku="MAT-001", location_id="warehouse_north", quantity=100, unit="piece", supplier_id="sup1", status="open", expected_arrival_days=5, created_at=datetime.now(UTC))
+    po = PurchaseOrder(
+        order_id="po_dup_test",
+        tenant_id="tenant_demo",
+        sku="MAT-001",
+        location_id="warehouse_north",
+        quantity=100,
+        unit="piece",
+        supplier_id="sup1",
+        status="open",
+        expected_arrival_days=5,
+        created_at=datetime.now(UTC),
+    )
     db.add(po)
     db.commit()
     # detect duplicate via domain logic
     from procurement_platform.domain.inventory import OpenPurchaseOrder, detect_duplicate_open_order
 
     open_orders = [
-        OpenPurchaseOrder(order_id="po_dup_test", sku="MAT-001", location_id="warehouse_north", quantity=100, unit="piece", supplier_id="sup1", status="open", expected_arrival_days=5)
+        OpenPurchaseOrder(
+            order_id="po_dup_test",
+            sku="MAT-001",
+            location_id="warehouse_north",
+            quantity=100,
+            unit="piece",
+            supplier_id="sup1",
+            status="open",
+            expected_arrival_days=5,
+        )
     ]
-    dup = detect_duplicate_open_order(sku="MAT-001", location_id="warehouse_north", quantity=100, unit="piece", supplier_id="sup1", open_orders=open_orders)
+    dup = detect_duplicate_open_order(
+        sku="MAT-001",
+        location_id="warehouse_north",
+        quantity=100,
+        unit="piece",
+        supplier_id="sup1",
+        open_orders=open_orders,
+    )
     assert dup is not None
     db.close()

@@ -5,6 +5,7 @@ Garantías:
 - Fallback determinista si Gemini no está disponible → DeepSeek → fake.
 - Metadata registrada (provider, model, prompt_version, tokens, coste).
 """
+
 from __future__ import annotations
 
 import uuid
@@ -58,11 +59,9 @@ class LLMAdapter(Protocol):
     provider: str
     model: str
 
-    async def generate(self, request: LLMRequest) -> LLMResponse:
-        ...
+    async def generate(self, request: LLMRequest) -> LLMResponse: ...
 
-    def supports_structured_output(self) -> bool:
-        ...
+    def supports_structured_output(self) -> bool: ...
 
 
 class LLMError(RuntimeError):

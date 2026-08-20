@@ -1,0 +1,33 @@
+{
+  "case_id": "budget_over_limit_001",
+  "description": "Orden total excede límite delegado 5000 USD — debe requerir aprobación humana y completar tras aprobar",
+  "input": {
+    "request_id": "req_budget_001",
+    "tenant_id": "tenant_demo",
+    "requester_id": "user_01",
+    "items": [
+      {
+        "sku": "MAT-001",
+        "quantity": 600,
+        "unit": "piece"
+      }
+    ],
+    "horizon_days": 21,
+    "location_id": "warehouse_north",
+    "currency": "USD",
+    "source": "agent_station"
+  },
+  "fixtures": {
+    "inventory": "fixture://inventory/happy_path",
+    "suppliers": "fixture://suppliers/demo",
+    "policies": ["fixture://policies/budget_limit_v1"]
+  },
+  "expected": {
+    "terminal_state": "COMPLETED",
+    "must_not_call": [],
+    "required_events": ["proposal.drafted", "approval.requested"],
+    "policy_decisions": ["fail"],
+    "notes": "Total 600*10=6000 > 5000, policy budget_limit fail blocking, risk high, requiere aprobación"
+  },
+  "tags": ["regression", "phase2", "phase5", "budget"]
+}

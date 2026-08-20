@@ -1,4 +1,5 @@
 """Servidor HTTP fake de Agent Station — para docker-compose y desarrollo local."""
+
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
@@ -21,13 +22,19 @@ async def callback(payload: ExecutionUpdateCallbackDTO, request: Request):
     # optional: check signature if X-Signature present (noop for fake)
     status = await _fake.receive_callback(payload)
     if status != 200:
-        return JSONResponse(status_code=status, content={"code": "temporarily_unavailable", "message": "injected failure"})
+        return JSONResponse(
+            status_code=status,
+            content={"code": "temporarily_unavailable", "message": "injected failure"},
+        )
     return {"status": "accepted", "execution_id": payload.execution_id}
 
 
 @app.get("/v1/callbacks")
 async def list_callbacks():
-    return {"count": len(_fake.callbacks), "callbacks": [c.model_dump(mode="json") for c in _fake.callbacks]}
+    return {
+        "count": len(_fake.callbacks),
+        "callbacks": [c.model_dump(mode="json") for c in _fake.callbacks],
+    }
 
 
 @app.post("/v1/admin/clear")

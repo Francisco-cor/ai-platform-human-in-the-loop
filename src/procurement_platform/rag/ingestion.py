@@ -3,6 +3,7 @@
 Pasos: hash/dedup, malware scan stub, extracción, clasificación, separación normativo/no confiable,
 fragmentación, embeddings, registro.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -11,6 +12,7 @@ from typing import Any
 from procurement_platform.rag.embeddings import FakeEmbedder, get_embedder
 from procurement_platform.rag.models import Chunk, ChunkMetadata, Document, IngestionResult
 from procurement_platform.rag.security import classify_content, detect_prompt_injection
+from procurement_platform.security.pii import detect_pii, redact_pii
 
 
 def compute_content_hash(content: str) -> str:
@@ -23,14 +25,24 @@ def scan_malware_stub(content: str, filename: str | None = None) -> dict[str, An
     if filename:
         ext = "." + filename.split(".")[-1].lower() if "." in filename else ""
         if ext and ext not in allowed_extensions:
-            return {"is_clean": False, "reason": f"extensión no permitida {ext}", "flags": ["blocked_extension"]}
+            return {
+                "is_clean": False,
+                "reason": f"extensión no permitida {ext}",
+                "flags": ["blocked_extension"],
+            }
     # heurística simple: si contenido contiene binary marker
     if "\x00" in content:
-        return {"is_clean": False, "reason": "contenido binario sospechoso", "flags": ["binary_content"]}
+        return {
+            "is_clean": False,
+            "reason": "contenido binario sospechoso",
+            "flags": ["binary_content"],
+        }
     return {"is_clean": True, "reason": "ok", "flags": []}
 
 
-def extract_text_preserving_pages(content: str, pages: list[dict[str, Any]] | None = None) -> tuple[str, list[dict[str, Any]]]:
+def extract_text_preserving_pages(
+    content: str, pages: list[dict[str, Any]] | None = None
+) -> tuple[str, list[dict[str, Any]]]:
     """Extrae texto preservando páginas/secciones. Fase 3: stub que preserva si ya vienen páginas."""
     if pages:
         return content, pages
@@ -59,7 +71,9 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
 class IngestionPipeline:
     """Pipeline de ingesta con defensa multicapa."""
 
-    def __init__(self, embedder: FakeEmbedder | None = None, chunk_size: int = 500, chunk_overlap: int = 50) -> None:
+    def __init__(
+        self, embedder: FakeEmbedder | None = None, chunk_size: int = 500, chunk_overlap: int = 50
+    ) -> None:
         self.embedder = embedder or get_embedder()
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
@@ -77,20 +91,47 @@ class IngestionPipeline:
         content_hash = compute_content_hash(document.content)
         document.metadata.content_hash = content_hash
         if content_hash in self._seen_hashes:
-            return IngestionResult(document_id=document.metadata.document_id, status="duplicate", chunks_created=0, content_hash=content_hash, reason="hash duplicado"), []
+            return IngestionResult(
+                document_id=document.metadata.document_id,
+                status="duplicate",
+                chunks_created=0,
+                content_hash=content_hash,
+                reason="hash duplicado",
+            ), []
         # 2. malware scan
         scan = scan_malware_stub(document.content, filename)
         if not scan["is_clean"]:
             document.metadata.security_flags = scan["flags"]
-            return IngestionResult(document_id=document.metadata.document_id, status="rejected", chunks_created=0, content_hash=content_hash, security_flags=scan["flags"], reason=scan["reason"]), []
+            return IngestionResult(
+                document_id=document.metadata.document_id,
+                status="rejected",
+                chunks_created=0,
+                content_hash=content_hash,
+                security_flags=scan["flags"],
+                reason=scan["reason"],
+            ), []
         # 3. extracción
         full_text, pages = extract_text_preserving_pages(document.content, document.pages)
+        # 3b. PII detection — redactar antes de indexar (Fase 7)
+        pii_info = detect_pii(full_text)
+        if pii_info["has_pii"]:
+            # redactar contenido antes de chunking/embeddings para evitar fuga
+            redacted_text, _ = redact_pii(full_text)
+            # preservar original en metadata security_flags para auditoría, pero indexar redactado
+            full_text = redacted_text
+            # añadir flag pii_redacted
+            # no bloquea, pero se audita
+            pii_redacted = True
+        else:
+            pii_redacted = False
         # 4. detección injection sobre documento completo
         injection = detect_prompt_injection(full_text)
         classification = classify_content(full_text, metadata=document.metadata.model_dump())
         is_malicious = classification["is_malicious"]
         reliability = classification["reliability"]
         security_flags = classification["flags"]
+        if pii_redacted:
+            security_flags = list(security_flags) + ["pii_redacted"]
         # si es malicioso, no se indexa para decisiones automáticas pero se conserva evidencia
         if is_malicious:
             # Fase 3: marcar y conservar evidencia, impedir que se convierta en instrucción
@@ -98,7 +139,14 @@ class IngestionPipeline:
             document.metadata.security_flags = security_flags
             document.metadata.is_malicious = True
             document.metadata.content_hash = content_hash
-            return IngestionResult(document_id=document.metadata.document_id, status="quarantined", chunks_created=0, content_hash=content_hash, security_flags=security_flags, reason="prompt_injection_detectado"), []
+            return IngestionResult(
+                document_id=document.metadata.document_id,
+                status="quarantined",
+                chunks_created=0,
+                content_hash=content_hash,
+                security_flags=security_flags,
+                reason="prompt_injection_detectado",
+            ), []
 
         # 5. fragmentación con metadata
         raw_chunks = chunk_text(full_text, chunk_size=self.chunk_size, overlap=self.chunk_overlap)
@@ -127,23 +175,44 @@ class IngestionPipeline:
                 jurisdiction=document.metadata.jurisdiction,
                 location_id=document.metadata.location_id,
                 status=document.metadata.status,
-                policy_type=document.metadata.doc_type.value if document.metadata.doc_type else None,
+                policy_type=document.metadata.doc_type.value
+                if document.metadata.doc_type
+                else None,
                 reliability=chunk_reliability,  # type: ignore
                 is_malicious=False,
                 security_flags=chunk_flags,
             )
             # embedding
             emb = self.embedder.embed(chunk_text_content)
-            chunk = Chunk(metadata=meta, text=chunk_text_content, embedding=emb, embedding_model=self.embedder.model_name)
+            chunk = Chunk(
+                metadata=meta,
+                text=chunk_text_content,
+                embedding=emb,
+                embedding_model=self.embedder.model_name,
+            )
             chunks.append(chunk)
 
-        # registrar hash
+        # registrar hash (sobre contenido original hasheado arriba)
         self._seen_hashes.add(content_hash)
-        # actualizar metadata
+        # actualizar metadata — si hubo PII redaction, también actualizar document.content redactado
+        if pii_redacted:
+            document.content = full_text
         document.metadata.content_hash = content_hash
         document.metadata.security_flags = security_flags
+        if pii_info["has_pii"]:
+            document.metadata.security_flags = list(
+                document.metadata.security_flags or []
+            )  # ensure list
+            # añadir detalle de pii_count para trazabilidad sin exponer valores
+            document.metadata.security_flags.append(f"pii_count:{pii_info['count']}")
 
-        return IngestionResult(document_id=document.metadata.document_id, status="indexed", chunks_created=len(chunks), content_hash=content_hash, security_flags=security_flags), chunks
+        return IngestionResult(
+            document_id=document.metadata.document_id,
+            status="indexed",
+            chunks_created=len(chunks),
+            content_hash=content_hash,
+            security_flags=security_flags,
+        ), chunks
 
     def reset(self) -> None:
         self._seen_hashes.clear()

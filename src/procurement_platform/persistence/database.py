@@ -1,4 +1,5 @@
 """Database engine and session factory (Fase 1)."""
+
 from __future__ import annotations
 
 from sqlalchemy import create_engine

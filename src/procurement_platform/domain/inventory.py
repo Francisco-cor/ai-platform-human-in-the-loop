@@ -3,6 +3,7 @@
 Cálculos puros, sin LLM, sin DB, sin efectos externos.
 Todos los fixtures producen el mismo resultado.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -129,7 +130,14 @@ def calculate_shortage_for_item(
     if snapshot is None:
         missing.append(f"inventory_snapshot:{sku}@{location_id}")
         # snapshot por defecto: 0
-        snapshot = InventorySnapshot(sku=sku, location_id=location_id, on_hand=0, reserved=0, in_transit=0, unit=requested_unit)
+        snapshot = InventorySnapshot(
+            sku=sku,
+            location_id=location_id,
+            on_hand=0,
+            reserved=0,
+            in_transit=0,
+            unit=requested_unit,
+        )
         assumptions.append("snapshot_missing_treated_as_zero")
 
     if forecast is None:
@@ -141,7 +149,9 @@ def calculate_shortage_for_item(
         # Convertir daily_demand a unidad solicitada si es distinta
         try:
             if forecast.unit != requested_unit:
-                daily_demand = convert_quantity(forecast.daily_demand, forecast.unit, requested_unit)
+                daily_demand = convert_quantity(
+                    forecast.daily_demand, forecast.unit, requested_unit
+                )
                 assumptions.append(f"converted_demand_{forecast.unit}_to_{requested_unit}")
                 daily_demand_unit = requested_unit
             else:
@@ -158,7 +168,9 @@ def calculate_shortage_for_item(
     # Pero para shortage usamos unidad solicitada como canónica del RequestItem
     # Necesitamos snapshot.available en requested_unit
     try:
-        available_in_requested_unit = convert_quantity(snapshot.available, snapshot.unit, requested_unit)
+        available_in_requested_unit = convert_quantity(
+            snapshot.available, snapshot.unit, requested_unit
+        )
         if snapshot.unit != requested_unit:
             assumptions.append(f"converted_available_{snapshot.unit}_to_{requested_unit}")
     except ValueError:
@@ -170,10 +182,14 @@ def calculate_shortage_for_item(
     try:
         snapshot_in_transit = convert_quantity(snapshot.in_transit, snapshot.unit, requested_unit)
         if snapshot.in_transit > 0:
-            assumptions.append(f"snapshot_in_transit_{snapshot.in_transit}_{snapshot.unit}_included")
+            assumptions.append(
+                f"snapshot_in_transit_{snapshot.in_transit}_{snapshot.unit}_included"
+            )
     except ValueError:
         snapshot_in_transit = 0
-        missing.append(f"unit_conversion_failed_snapshot_in_transit:{snapshot.unit}->{requested_unit}")
+        missing.append(
+            f"unit_conversion_failed_snapshot_in_transit:{snapshot.unit}->{requested_unit}"
+        )
 
     # In-transit de órdenes abiertas considerado solo si arrival <= horizon_days
     in_transit_considered = snapshot_in_transit
@@ -321,21 +337,30 @@ def load_context_from_fixtures(
             reserved=float(item.get("reserved", 0)),
             in_transit=float(item.get("in_transit", 0)),
             unit=item.get("unit", "piece"),
-            lead_time_days=item.get("lead_time_days") or inventory_fixture.get("lead_times_days", {}).get(sku),
+            lead_time_days=item.get("lead_time_days")
+            or inventory_fixture.get("lead_times_days", {}).get(sku),
         )
         snapshots[(sku, location_id)] = snap
         # demanda puede venir en mismo fixture (Fase 1) o separado
         if "daily_demand_forecast" in item or "daily_demand" in item:
             dd = item.get("daily_demand_forecast", item.get("daily_demand", 0))
             forecasts[(sku, location_id)] = DemandForecast(
-                sku=sku, location_id=location_id, daily_demand=float(dd), unit=item.get("unit", "piece")
+                sku=sku,
+                location_id=location_id,
+                daily_demand=float(dd),
+                unit=item.get("unit", "piece"),
             )
     # demanda separada
     if demand_fixture:
         for item in demand_fixture.get("items", []):
             sku = item["sku"]
             loc = item.get("location_id", location_id)
-            forecasts[(sku, loc)] = DemandForecast(sku=sku, location_id=loc, daily_demand=float(item["daily_demand"]), unit=item.get("unit", "piece"))
+            forecasts[(sku, loc)] = DemandForecast(
+                sku=sku,
+                location_id=loc,
+                daily_demand=float(item["daily_demand"]),
+                unit=item.get("unit", "piece"),
+            )
 
     open_orders: list[OpenPurchaseOrder] = []
     for oo in open_orders_fixture or []:

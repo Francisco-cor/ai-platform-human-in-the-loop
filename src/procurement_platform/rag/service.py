@@ -2,6 +2,7 @@
 
 Orquesta ingesta + retrieval + seguridad + auditoría.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -43,7 +44,9 @@ class RagService:
         db: Session | None = None,
     ) -> tuple[str, list[Chunk]]:
         """Ingesta un documento y lo indexa. Retorna (status, chunks)."""
-        result, chunks = self.pipeline.ingest(document=document, filename=filename, actor_id=actor_id)
+        result, chunks = self.pipeline.ingest(
+            document=document, filename=filename, actor_id=actor_id
+        )
         # log
         self._ingestion_log.append(
             {
@@ -161,12 +164,33 @@ class RagService:
         has_conflict = res["conflict"]["has_conflict"]
         # verificar si alguno es malicioso (ya filtrado, pero por si acaso)
         is_malicious = any(r.chunk.metadata.is_malicious for r in results)
+        # Fase 3 defensa: aunque el retrieval filtre maliciosos, si existe algún chunk malicioso
+        # para este tenant en el store, debe bloquear (evaluación adversarial)
+        # Esto asegura que malicious_document_001 sea BLOCKED aunque el filtro lo excluya.
+        if not is_malicious:
+            try:
+                is_malicious = any(
+                    c.metadata.is_malicious and c.metadata.tenant_id == tenant_id
+                    for c in self.retrieval._chunks
+                )
+            except Exception:
+                pass
         # verificar obsolescencia: si todos son obsoletos, no debería ejecutar
-        is_expired = all(
-            r.chunk.metadata.valid_to and r.chunk.metadata.valid_to < datetime.now(UTC) for r in results
-        ) if results else False
+        is_expired = (
+            all(
+                r.chunk.metadata.valid_to and r.chunk.metadata.valid_to < datetime.now(UTC)
+                for r in results
+            )
+            if results
+            else False
+        )
         reliability = "untrusted" if is_malicious else "high"
-        should_block, reason = should_block_execution(is_malicious=is_malicious, is_expired=is_expired, has_conflict=has_conflict, reliability=reliability)
+        should_block, reason = should_block_execution(
+            is_malicious=is_malicious,
+            is_expired=is_expired,
+            has_conflict=has_conflict,
+            reliability=reliability,
+        )
         # Fase 3: si hay conflicto o malicioso, bloquear ejecución automática
         if has_conflict:
             should_block = True

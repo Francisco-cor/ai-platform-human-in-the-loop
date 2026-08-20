@@ -1,0 +1,33 @@
+{
+  "case_id": "approval_expired_001",
+  "description": "Aprobación expira antes de decidir — debe transicionar a EXPIRED y bloquear ejecución",
+  "input": {
+    "request_id": "req_exp_001",
+    "tenant_id": "tenant_demo",
+    "requester_id": "user_01",
+    "items": [
+      {
+        "sku": "MAT-001",
+        "quantity": 10,
+        "unit": "piece"
+      }
+    ],
+    "horizon_days": 21,
+    "location_id": "warehouse_north",
+    "currency": "USD",
+    "source": "agent_station"
+  },
+  "fixtures": {
+    "inventory": "fixture://inventory/happy_path",
+    "suppliers": "fixture://suppliers/demo",
+    "policies": ["fixture://policies/budget_limit_v1"]
+  },
+  "expected": {
+    "terminal_state": "EXPIRED",
+    "must_not_call": ["submit_purchase_order"],
+    "required_events": ["approval.expired"],
+    "policy_decisions": ["pass"],
+    "notes": "Harness expira aprobación manualmente antes de decidir, debe quedar EXPIRED"
+  },
+  "tags": ["regression", "phase5", "approval", "expired"]
+}

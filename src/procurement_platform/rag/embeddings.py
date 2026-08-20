@@ -4,6 +4,7 @@ Para no depender de modelo real en tests/CI, usamos embeddings fake determinista
 basados en hash del texto. En producción se reemplazaría por proveedor real (Gemini, etc.)
 detrás de la misma interfaz.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -13,11 +14,9 @@ from typing import Protocol
 
 
 class Embedder(Protocol):
-    def embed(self, text: str) -> list[float]:
-        ...
+    def embed(self, text: str) -> list[float]: ...
 
-    def embed_many(self, texts: list[str]) -> list[list[float]]:
-        ...
+    def embed_many(self, texts: list[str]) -> list[list[float]]: ...
 
 
 class FakeEmbedder:

@@ -2,6 +2,7 @@
 
 Cada documento y chunk lleva metadata de tenant, vigencia, jurisdicción y permisos.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -117,11 +118,16 @@ class RetrievalQuery(BaseModel):
 class RetrievalResult(BaseModel):
     chunk: Chunk
     score: float
-    citation: dict[str, Any] = Field(default_factory=dict)  # document_id, version, page/section, score
+    citation: dict[str, Any] = Field(
+        default_factory=dict
+    )  # document_id, version, page/section, score
 
     @property
     def is_reliable(self) -> bool:
-        return self.chunk.metadata.reliability in {"high", "medium"} and not self.chunk.metadata.is_malicious
+        return (
+            self.chunk.metadata.reliability in {"high", "medium"}
+            and not self.chunk.metadata.is_malicious
+        )
 
 
 class IngestionResult(BaseModel):

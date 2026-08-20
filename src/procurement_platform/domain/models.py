@@ -4,6 +4,7 @@ Garantías del Plan §6:
 - Solicitud normalizada, Propuesta, Decisión de aprobación, Eventos de auditoría.
 - Estados del workflow §5.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -196,7 +197,13 @@ class Proposal(BaseModel):
         *, proposal_id: str, supplier_id: str, lines: list[dict], total: float, currency: str
     ) -> str:
         payload = json.dumps(
-            {"proposal_id": proposal_id, "supplier_id": supplier_id, "lines": lines, "total": total, "currency": currency},
+            {
+                "proposal_id": proposal_id,
+                "supplier_id": supplier_id,
+                "lines": lines,
+                "total": total,
+                "currency": currency,
+            },
             sort_keys=True,
             separators=(",", ":"),
         )
@@ -231,6 +238,36 @@ class ApprovalRequest(BaseModel):
     decided_by: str | None = None
     decision_reason: str | None = None
     decided_at: datetime | None = None
+    # Fase 5 — snapshot inmutable y trazabilidad
+    proposal_snapshot: dict[str, Any] | None = Field(
+        default=None,
+        description="Snapshot inmutable de la propuesta al momento de solicitar aprobación",
+    )
+    risk_level: str | None = None
+    total: float | None = None
+    currency: str | None = None
+    required_approvals: int = Field(
+        default=1,
+        ge=1,
+        le=5,
+        description="Número de aprobaciones requeridas (doble aprobación si riesgo alto)",
+    )
+    approvals_received: int = Field(default=0, ge=0)
+    approvers: list[str] = Field(default_factory=list)
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        now = now or utcnow()
+        return now > self.expires_at
+
+    def is_scope_valid(self, proposal: Proposal) -> bool:  # type: ignore[no-redef]
+        return self.scope_hash == proposal.scope_hash
+
+    def can_decide(self, now: datetime | None = None) -> tuple[bool, str]:
+        if self.status != ApprovalStatus.pending:
+            return False, f"already_decided:{self.status.value}"
+        if self.is_expired(now):
+            return False, "expired"
+        return True, "ok"
 
 
 class ApprovalDecision(BaseModel):

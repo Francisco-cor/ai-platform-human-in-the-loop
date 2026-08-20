@@ -34,7 +34,9 @@ def test_happy_path_eval_case(client: TestClient):
     events = client.get(f"/v1/procurement/executions/{execution_id}/events").json()
     event_types = [e["event_type"] for e in events["events"]]
     for required in case["expected"].get("required_events", []):
-        assert any(required in et for et in event_types), f"missing required event {required} in {event_types}"
+        assert any(required in et for et in event_types), (
+            f"missing required event {required} in {event_types}"
+        )
 
     # 6. ensure proposal scope_hash present and audit correlation
     assert final["proposal"] is not None

@@ -1,4 +1,5 @@
 """Recuperación RAG con filtros, citas y scoring — Fase 3 (§10)."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -51,7 +52,10 @@ class RetrievalService:
             if not obs["is_valid"]:
                 return False
         # clasificación
-        if query.allowed_classifications and meta.classification not in query.allowed_classifications:
+        if (
+            query.allowed_classifications
+            and meta.classification not in query.allowed_classifications
+        ):
             return False
         # seguridad: excluir maliciosos y untrusted si se requiere alta confiabilidad
         if meta.is_malicious:
@@ -89,7 +93,9 @@ class RetrievalService:
                 "section": chunk.metadata.section,
                 "score": round(score, 4),
                 "valid_from": chunk.metadata.valid_from.isoformat(),
-                "valid_to": chunk.metadata.valid_to.isoformat() if chunk.metadata.valid_to else None,
+                "valid_to": chunk.metadata.valid_to.isoformat()
+                if chunk.metadata.valid_to
+                else None,
                 "reliability": chunk.metadata.reliability,
                 "jurisdiction": chunk.metadata.jurisdiction,
             }
@@ -112,7 +118,9 @@ class RetrievalService:
         # no bloquear automáticamente, pero advertir
         warnings: list[str] = []
         for r in results:
-            obs = check_obsolescence(r.chunk.metadata.valid_from, r.chunk.metadata.valid_to, now or datetime.now(UTC))
+            obs = check_obsolescence(
+                r.chunk.metadata.valid_from, r.chunk.metadata.valid_to, now or datetime.now(UTC)
+            )
             if obs["is_expired"]:
                 warnings.append(f"document {r.chunk.metadata.document_id} vencido")
         # detectar conflicto entre políticas recuperadas
@@ -128,7 +136,11 @@ class RetrievalService:
                     "rules": {"text": r.chunk.text[:200]},
                 }
             )
-        conflict_info = detect_conflict(policies_for_conflict) if len(policies_for_conflict) > 1 else {"has_conflict": False, "conflicts": []}
+        conflict_info = (
+            detect_conflict(policies_for_conflict)
+            if len(policies_for_conflict) > 1
+            else {"has_conflict": False, "conflicts": []}
+        )
         if conflict_info["has_conflict"]:
             warnings.append(f"conflicto detectado: {conflict_info['conflicts']}")
 

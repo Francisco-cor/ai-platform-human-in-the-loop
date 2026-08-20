@@ -1,4 +1,5 @@
 """Gemini adapter — Fase 4."""
+
 from __future__ import annotations
 
 import json
@@ -6,14 +7,23 @@ import time
 
 import httpx
 
-from procurement_platform.agents.adapter import LLMError, LLMRequest, LLMResponse, LLMUsage, estimate_cost, truncate_context
+from procurement_platform.agents.adapter import (
+    LLMError,
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+    estimate_cost,
+    truncate_context,
+)
 from procurement_platform.config.settings import get_settings
 
 
 class GeminiAdapter:
     provider = "gemini"
 
-    def __init__(self, api_key: str | None = None, model: str | None = None, base_url: str | None = None) -> None:
+    def __init__(
+        self, api_key: str | None = None, model: str | None = None, base_url: str | None = None
+    ) -> None:
         settings = get_settings()
         self.api_key = api_key or settings.gemini_api_key
         self.model = model or settings.gemini_model
@@ -48,7 +58,9 @@ class GeminiAdapter:
         url = f"{self.base_url}/v1beta/models/{self.model}:generateContent?key={self.api_key}"
         async with httpx.AsyncClient(timeout=self.timeout_ms / 1000) as client:
             try:
-                resp = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
+                resp = await client.post(
+                    url, json=payload, headers={"Content-Type": "application/json"}
+                )
             except httpx.TimeoutException as e:
                 raise LLMError(f"Gemini timeout: {e}") from e
             except Exception as e:
@@ -76,7 +88,11 @@ class GeminiAdapter:
             prompt_tokens = usage_meta.get("promptTokenCount", 0)
             completion_tokens = usage_meta.get("candidatesTokenCount", 0)
             total_tokens = usage_meta.get("totalTokenCount", prompt_tokens + completion_tokens)
-            usage = LLMUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=total_tokens)
+            usage = LLMUsage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
             usage.estimated_cost_usd = estimate_cost(self.provider, self.model, usage)
 
             # Parsear JSON si se esperaba

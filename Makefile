@@ -35,7 +35,29 @@ migrate-new:
 	alembic revision --autogenerate -m "$(msg)"
 
 eval:
-	python -m procurement_platform.evals.runner --dataset procurement --suite happy_path
+	python -m procurement_platform.evals.runner --mode direct --suite all
+
+eval-api:
+	python -m procurement_platform.evals.runner --mode api --suite all --base-url http://localhost:8000
+
+eval-gate:
+	python -m procurement_platform.evals.runner --mode direct --suite all --gate --baseline evals/reports/baseline_v2.json
+
+eval-gate-v1:
+	python -m procurement_platform.evals.runner --mode direct --suite all --gate --baseline evals/reports/baseline_v1.json
+
+eval-report:
+	python -m procurement_platform.evals.runner --mode direct --suite all --output evals/reports/latest.json
+
+eval-security:
+	python -m pytest tests/security -v
+	python -m pytest tests/integration/test_security_adversarial.py -v
+
+audit:
+	pip-audit --desc || echo "pip-audit done"
+
+threat-model:
+	cat docs/security/threat-model.md
 
 health:
 	curl -s http://localhost:8000/healthz | python -m json.tool

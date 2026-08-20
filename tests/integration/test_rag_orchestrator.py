@@ -68,7 +68,11 @@ def test_rag_orchestrator_blocks_on_conflict():
     # Advance should hit POLICY_RETRIEVED and then block
     exec_obj = orch.advance_synthetic(db, exec_obj.execution_id, trace_id="trace_conflict")
     # Should be BLOCKED due to conflict
-    assert exec_obj.status.value == "BLOCKED" or exec_obj.status.value in ("BLOCKED", "FAILED_TERMINAL", "NEEDS_CLARIFICATION")
+    assert exec_obj.status.value == "BLOCKED" or exec_obj.status.value in (
+        "BLOCKED",
+        "FAILED_TERMINAL",
+        "NEEDS_CLARIFICATION",
+    )
     db.close()
     rag.clear()
     # Re-seed default policies for other tests
@@ -109,7 +113,15 @@ def test_rag_orchestrator_malicious_not_indexed_and_not_blocking():
     SessionLocal = get_sessionmaker()
     db = SessionLocal()
     orch = WorkflowOrchestrator(rag_service=rag)
-    norm = NormalizedRequest(request_id="req_mal_test", tenant_id="tenant_demo", requester_id="user_01", items=[{"sku": "MAT-001", "quantity": 10, "unit": "piece"}], horizon_days=21, location_id="warehouse_north", currency="USD")
+    norm = NormalizedRequest(
+        request_id="req_mal_test",
+        tenant_id="tenant_demo",
+        requester_id="user_01",
+        items=[{"sku": "MAT-001", "quantity": 10, "unit": "piece"}],
+        horizon_days=21,
+        location_id="warehouse_north",
+        currency="USD",
+    )
     exec_obj = orch.create_execution(db, normalized=norm)
     exec_obj = orch.advance_synthetic(db, exec_obj.execution_id)
     # Should proceed to AWAITING_APPROVAL (not blocked)

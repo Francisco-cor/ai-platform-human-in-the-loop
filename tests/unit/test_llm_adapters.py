@@ -8,7 +8,15 @@ from procurement_platform.agents.fake import FakeAdapter
 @pytest.mark.asyncio
 async def test_fake_adapter_happy():
     adapter = FakeAdapter(mode="happy")
-    req = LLMRequest(system_prompt="system", user_prompt="draft proposal for MAT-001", response_schema={"type": "object", "required": ["supplier_id", "lines"], "properties": {"supplier_id": {"type": "string"}, "lines": {"type": "array"}}})
+    req = LLMRequest(
+        system_prompt="system",
+        user_prompt="draft proposal for MAT-001",
+        response_schema={
+            "type": "object",
+            "required": ["supplier_id", "lines"],
+            "properties": {"supplier_id": {"type": "string"}, "lines": {"type": "array"}},
+        },
+    )
     resp = await adapter.generate(req)
     assert resp.provider == "fake"
     assert isinstance(resp.content, dict)
@@ -19,7 +27,15 @@ async def test_fake_adapter_happy():
 @pytest.mark.asyncio
 async def test_fake_adapter_invalid_json():
     adapter = FakeAdapter(mode="invalid_json")
-    req = LLMRequest(system_prompt="system", user_prompt="test", response_schema={"type": "object", "required": ["supplier_id"], "properties": {"supplier_id": {"type": "string"}}})
+    req = LLMRequest(
+        system_prompt="system",
+        user_prompt="test",
+        response_schema={
+            "type": "object",
+            "required": ["supplier_id"],
+            "properties": {"supplier_id": {"type": "string"}},
+        },
+    )
     resp = await adapter.generate(req)
     # raw is not json, content is raw string
     assert isinstance(resp.content, str)
@@ -35,7 +51,15 @@ async def test_factory_auto_fallback_to_fake():
 
 
 def test_factory_sync_fake():
-    req = LLMRequest(system_prompt="system", user_prompt="normalize request test", response_schema={"type": "object", "required": ["items"], "properties": {"items": {"type": "array"}}})
+    req = LLMRequest(
+        system_prompt="system",
+        user_prompt="normalize request test",
+        response_schema={
+            "type": "object",
+            "required": ["items"],
+            "properties": {"items": {"type": "array"}},
+        },
+    )
     resp = run_llm_sync(req)
     assert resp.provider == "fake"
     assert isinstance(resp.content, dict)

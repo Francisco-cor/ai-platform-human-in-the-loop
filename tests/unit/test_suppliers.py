@@ -1,4 +1,3 @@
-
 import pytest
 
 from procurement_platform.domain.suppliers import (
@@ -12,13 +11,40 @@ def test_supplier_search_basic():
     catalog = load_catalog_from_fixtures(
         {
             "suppliers": [
-                {"supplier_id": "supplier_demo", "name": "Demo", "active": True, "allowed_tenants": ["tenant_demo"], "currency": "USD", "min_order": 1, "max_order": 1000, "lead_time_days": 7},
-                {"supplier_id": "supplier_alt", "name": "Alt", "active": True, "allowed_tenants": ["tenant_demo"], "currency": "USD", "min_order": 1, "max_order": 1000, "lead_time_days": 5},
+                {
+                    "supplier_id": "supplier_demo",
+                    "name": "Demo",
+                    "active": True,
+                    "allowed_tenants": ["tenant_demo"],
+                    "currency": "USD",
+                    "min_order": 1,
+                    "max_order": 1000,
+                    "lead_time_days": 7,
+                },
+                {
+                    "supplier_id": "supplier_alt",
+                    "name": "Alt",
+                    "active": True,
+                    "allowed_tenants": ["tenant_demo"],
+                    "currency": "USD",
+                    "min_order": 1,
+                    "max_order": 1000,
+                    "lead_time_days": 5,
+                },
             ],
-            "quotes": [{"sku": "MAT-001", "unit_price": 10.0}, {"sku": "MAT-002", "unit_price": 25.0}],
+            "quotes": [
+                {"sku": "MAT-001", "unit_price": 10.0},
+                {"sku": "MAT-002", "unit_price": 25.0},
+            ],
         }
     )
-    quotes = catalog.search(sku="MAT-001", quantity=100, currency="USD", tenant_id="tenant_demo", location_id="warehouse_north")
+    quotes = catalog.search(
+        sku="MAT-001",
+        quantity=100,
+        currency="USD",
+        tenant_id="tenant_demo",
+        location_id="warehouse_north",
+    )
     assert len(quotes) == 2
     # sorted by price then lead_time: both price similar (recargo diff), but determinista
     assert quotes[0].unit_price <= quotes[1].unit_price
@@ -27,8 +53,12 @@ def test_supplier_search_basic():
 def test_supplier_filter_inactive():
     catalog = SupplierCatalog(
         suppliers={
-            "active_sup": Supplier(supplier_id="active_sup", name="Active", active=True, currency="USD"),
-            "inactive_sup": Supplier(supplier_id="inactive_sup", name="Inactive", active=False, currency="USD"),
+            "active_sup": Supplier(
+                supplier_id="active_sup", name="Active", active=True, currency="USD"
+            ),
+            "inactive_sup": Supplier(
+                supplier_id="inactive_sup", name="Inactive", active=False, currency="USD"
+            ),
         },
         base_prices={"MAT-001": 10.0},
     )
@@ -41,8 +71,20 @@ def test_supplier_filter_tenant():
     catalog = load_catalog_from_fixtures(
         {
             "suppliers": [
-                {"supplier_id": "sup_tenant_a", "name": "A", "active": True, "allowed_tenants": ["tenant_a"], "currency": "USD"},
-                {"supplier_id": "sup_tenant_b", "name": "B", "active": True, "allowed_tenants": ["tenant_b"], "currency": "USD"},
+                {
+                    "supplier_id": "sup_tenant_a",
+                    "name": "A",
+                    "active": True,
+                    "allowed_tenants": ["tenant_a"],
+                    "currency": "USD",
+                },
+                {
+                    "supplier_id": "sup_tenant_b",
+                    "name": "B",
+                    "active": True,
+                    "allowed_tenants": ["tenant_b"],
+                    "currency": "USD",
+                },
             ],
             "quotes": [{"sku": "MAT-001", "unit_price": 10.0}],
         }
@@ -55,7 +97,14 @@ def test_supplier_filter_tenant():
 def test_supplier_min_max_filter():
     catalog = SupplierCatalog(
         suppliers={
-            "sup": Supplier(supplier_id="sup", name="Sup", active=True, currency="USD", min_order_qty=10, max_order_qty=100),
+            "sup": Supplier(
+                supplier_id="sup",
+                name="Sup",
+                active=True,
+                currency="USD",
+                min_order_qty=10,
+                max_order_qty=100,
+            ),
         },
         base_prices={"MAT-001": 10.0},
     )
@@ -98,15 +147,45 @@ def test_build_proposal_lines_from_shortages():
     from procurement_platform.domain.suppliers import build_proposal_lines_from_shortages
 
     ctx = load_context_from_fixtures(
-        inventory_fixture={"location_id": "warehouse_north", "items": [{"sku": "MAT-001", "on_hand": 0, "reserved": 0, "in_transit": 0, "daily_demand_forecast": 5}]},
+        inventory_fixture={
+            "location_id": "warehouse_north",
+            "items": [
+                {
+                    "sku": "MAT-001",
+                    "on_hand": 0,
+                    "reserved": 0,
+                    "in_transit": 0,
+                    "daily_demand_forecast": 5,
+                }
+            ],
+        },
         open_orders_fixture=[],
     )
     from procurement_platform.domain.inventory import calculate_shortages
 
-    shortages = calculate_shortages(items=[{"sku": "MAT-001", "quantity": 10, "unit": "piece"}], location_id="warehouse_north", horizon_days=10, ctx=ctx)
+    shortages = calculate_shortages(
+        items=[{"sku": "MAT-001", "quantity": 10, "unit": "piece"}],
+        location_id="warehouse_north",
+        horizon_days=10,
+        ctx=ctx,
+    )
     # demand 50, shortage 50, requested 10 => qty max(50,10)=50
-    catalog = load_catalog_from_fixtures({"suppliers": [{"supplier_id": "sup1", "name": "Sup1", "active": True, "currency": "USD"}], "quotes": [{"sku": "MAT-001", "unit_price": 5.0}]})
-    lines, missing, assumptions = build_proposal_lines_from_shortages(shortages=shortages, catalog=catalog, currency="USD", tenant_id="tenant_demo", location_id="warehouse_north", horizon_days=10)
+    catalog = load_catalog_from_fixtures(
+        {
+            "suppliers": [
+                {"supplier_id": "sup1", "name": "Sup1", "active": True, "currency": "USD"}
+            ],
+            "quotes": [{"sku": "MAT-001", "unit_price": 5.0}],
+        }
+    )
+    lines, missing, assumptions = build_proposal_lines_from_shortages(
+        shortages=shortages,
+        catalog=catalog,
+        currency="USD",
+        tenant_id="tenant_demo",
+        location_id="warehouse_north",
+        horizon_days=10,
+    )
     assert len(lines) == 1
     assert lines[0].quantity == 50
     assert lines[0].unit_price == pytest.approx(5.0, rel=0.1)  # recargo 0-4%

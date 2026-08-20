@@ -12,6 +12,7 @@ Uso en tests:
 Uso como servidor HTTP (docker-compose):
     uvicorn procurement_platform.integrations.agent_station.fake_server:app --port 8001
 """
+
 from __future__ import annotations
 
 from collections import deque
@@ -25,7 +26,9 @@ class FakeAgentStation:
     """Fake sincrónico / asíncrono en memoria."""
 
     max_events: int = 1000
-    _callbacks: deque[ExecutionUpdateCallbackDTO] = field(default_factory=lambda: deque(maxlen=1000))
+    _callbacks: deque[ExecutionUpdateCallbackDTO] = field(
+        default_factory=lambda: deque(maxlen=1000)
+    )
     _fail_next_n: int = 0
     _fail_status: int = 503
 

@@ -9,12 +9,22 @@ def test_orchestrator_with_llm_happy_path():
     SessionLocal = get_sessionmaker()
     db = SessionLocal()
     orch = WorkflowOrchestrator()
-    norm = NormalizedRequest(request_id=new_id("req"), tenant_id="tenant_demo", requester_id="user_01", items=[{"sku": "MAT-001", "quantity": 50, "unit": "piece"}], horizon_days=21, location_id="warehouse_north", currency="USD")
+    norm = NormalizedRequest(
+        request_id=new_id("req"),
+        tenant_id="tenant_demo",
+        requester_id="user_01",
+        items=[{"sku": "MAT-001", "quantity": 50, "unit": "piece"}],
+        horizon_days=21,
+        location_id="warehouse_north",
+        currency="USD",
+    )
     exec_obj = orch.create_execution(db, normalized=norm)
     exec_obj = orch.advance_synthetic(db, exec_obj.execution_id)
     # Fase 4: debe producir propuesta válida aunque use LLM
     assert exec_obj.proposal is not None
-    assert exec_obj.proposal.total == round(exec_obj.proposal.lines[0].quantity * exec_obj.proposal.lines[0].unit_price, 2)
+    assert exec_obj.proposal.total == round(
+        exec_obj.proposal.lines[0].quantity * exec_obj.proposal.lines[0].unit_price, 2
+    )
     # evidence debe mencionar LLM o determinista
     assert exec_obj.proposal.evidence is not None
     assert exec_obj.status.value == "AWAITING_APPROVAL"
@@ -27,7 +37,15 @@ def test_orchestrator_llm_invalid_output_fallback():
     db = SessionLocal()
     # Crear orchestrator normal, pero parchear _call_llm_for_proposal para retornar invalid
     orch = WorkflowOrchestrator()
-    norm = NormalizedRequest(request_id=new_id("req"), tenant_id="tenant_demo", requester_id="user_01", items=[{"sku": "MAT-001", "quantity": 10, "unit": "piece"}], horizon_days=21, location_id="warehouse_north", currency="USD")
+    norm = NormalizedRequest(
+        request_id=new_id("req"),
+        tenant_id="tenant_demo",
+        requester_id="user_01",
+        items=[{"sku": "MAT-001", "quantity": 10, "unit": "piece"}],
+        horizon_days=21,
+        location_id="warehouse_north",
+        currency="USD",
+    )
     exec_obj = orch.create_execution(db, normalized=norm)
     # Parchear para que llm retorne invalid
     with patch.object(orch, "_call_llm_for_proposal", return_value=None):
@@ -45,7 +63,15 @@ def test_orchestrator_tool_budget_exceeded_blocks():
     orch = WorkflowOrchestrator()
     # Crear request con muchos items para exceder budget de supplier queries (default 5)
     items = [{"sku": f"MAT-00{i}", "quantity": 10, "unit": "piece"} for i in range(10)]
-    norm = NormalizedRequest(request_id=new_id("req"), tenant_id="tenant_demo", requester_id="user_01", items=items, horizon_days=21, location_id="warehouse_north", currency="USD")
+    norm = NormalizedRequest(
+        request_id=new_id("req"),
+        tenant_id="tenant_demo",
+        requester_id="user_01",
+        items=items,
+        horizon_days=21,
+        location_id="warehouse_north",
+        currency="USD",
+    )
     exec_obj = orch.create_execution(db, normalized=norm)
     # advance_synthetic debería detectar budget_exceeded y pasar a BLOCKED
     exec_obj = orch.advance_synthetic(db, exec_obj.execution_id)

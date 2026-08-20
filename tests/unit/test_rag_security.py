@@ -54,22 +54,66 @@ def test_obsolescence():
 
 def test_conflict_detection():
     policies = [
-        {"document_id": "doc1", "tenant_id": "tenant_demo", "policy_type": "budget_limit", "location_id": "warehouse_north", "rules": {"delegated_limit": 5000}},
-        {"document_id": "doc2", "tenant_id": "tenant_demo", "policy_type": "budget_limit", "location_id": "warehouse_north", "rules": {"delegated_limit": 1000}},
+        {
+            "document_id": "doc1",
+            "tenant_id": "tenant_demo",
+            "policy_type": "budget_limit",
+            "location_id": "warehouse_north",
+            "rules": {"delegated_limit": 5000},
+        },
+        {
+            "document_id": "doc2",
+            "tenant_id": "tenant_demo",
+            "policy_type": "budget_limit",
+            "location_id": "warehouse_north",
+            "rules": {"delegated_limit": 1000},
+        },
     ]
     res = detect_conflict(policies)
     assert res["has_conflict"] is True
     assert len(res["conflicts"]) == 1
 
     no_conflict = [
-        {"document_id": "doc1", "tenant_id": "tenant_demo", "policy_type": "budget_limit", "location_id": "warehouse_north", "rules": {"delegated_limit": 5000}},
-        {"document_id": "doc2", "tenant_id": "tenant_demo", "policy_type": "budget_limit", "location_id": "warehouse_north", "rules": {"delegated_limit": 5000}},
+        {
+            "document_id": "doc1",
+            "tenant_id": "tenant_demo",
+            "policy_type": "budget_limit",
+            "location_id": "warehouse_north",
+            "rules": {"delegated_limit": 5000},
+        },
+        {
+            "document_id": "doc2",
+            "tenant_id": "tenant_demo",
+            "policy_type": "budget_limit",
+            "location_id": "warehouse_north",
+            "rules": {"delegated_limit": 5000},
+        },
     ]
     assert detect_conflict(no_conflict)["has_conflict"] is False
 
 
 def test_should_block_execution():
-    assert should_block_execution(is_malicious=True, is_expired=False, has_conflict=False, reliability="high")[0] is True
-    assert should_block_execution(is_malicious=False, is_expired=False, has_conflict=True, reliability="high")[0] is True
-    assert should_block_execution(is_malicious=False, is_expired=False, has_conflict=False, reliability="high")[0] is False
-    assert should_block_execution(is_malicious=False, is_expired=False, has_conflict=False, reliability="untrusted")[0] is True
+    assert (
+        should_block_execution(
+            is_malicious=True, is_expired=False, has_conflict=False, reliability="high"
+        )[0]
+        is True
+    )
+    assert (
+        should_block_execution(
+            is_malicious=False, is_expired=False, has_conflict=True, reliability="high"
+        )[0]
+        is True
+    )
+    assert (
+        should_block_execution(
+            is_malicious=False, is_expired=False, has_conflict=False, reliability="high"
+        )[0]
+        is False
+    )
+    assert (
+        should_block_execution(
+            is_malicious=False, is_expired=False, has_conflict=False, reliability="untrusted"
+        )[0]
+        is True
+    )

@@ -2,6 +2,7 @@
 
 All env vars are prefixed with PROCUREMENT_ or AGENT_STATION_ to avoid collisions.
 """
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -51,15 +52,17 @@ class Settings(BaseSettings):
     agent_station_callback_token: str | None = Field(
         default=None, alias="AGENT_STATION_CALLBACK_TOKEN"
     )
-    platform_callback_token: str | None = Field(
-        default=None, alias="PLATFORM_CALLBACK_TOKEN"
-    )
+    platform_callback_token: str | None = Field(default=None, alias="PLATFORM_CALLBACK_TOKEN")
 
     # LLM / Agent (Fase 4)
-    llm_provider: Literal["auto", "gemini", "deepseek", "fake"] = Field(default="auto", alias="PROCUREMENT_LLM_PROVIDER")
+    llm_provider: Literal["auto", "gemini", "deepseek", "fake"] = Field(
+        default="auto", alias="PROCUREMENT_LLM_PROVIDER"
+    )
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
-    gemini_base_url: str = Field(default="https://generativelanguage.googleapis.com", alias="GEMINI_BASE_URL")
+    gemini_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com", alias="GEMINI_BASE_URL"
+    )
     deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY")
     deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
     deepseek_base_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
@@ -71,9 +74,13 @@ class Settings(BaseSettings):
     graph_version: str = Field(default="procurement-graph-v1", alias="PROCUREMENT_GRAPH_VERSION")
     # Tool budgets (Fase 4)
     max_tool_calls_per_execution: int = Field(default=20, alias="PROCUREMENT_MAX_TOOL_CALLS")
-    max_supplier_queries_per_execution: int = Field(default=5, alias="PROCUREMENT_MAX_SUPPLIER_QUERIES")
+    max_supplier_queries_per_execution: int = Field(
+        default=5, alias="PROCUREMENT_MAX_SUPPLIER_QUERIES"
+    )
     max_proposals_per_execution: int = Field(default=3, alias="PROCUREMENT_MAX_PROPOSALS")
-    max_tokens_per_execution: int = Field(default=8000, alias="PROCUREMENT_MAX_TOKENS_PER_EXECUTION")
+    max_tokens_per_execution: int = Field(
+        default=8000, alias="PROCUREMENT_MAX_TOKENS_PER_EXECUTION"
+    )
 
     # Security / limits
     max_payload_bytes: int = Field(default=256 * 1024, alias="PROCUREMENT_MAX_PAYLOAD_BYTES")

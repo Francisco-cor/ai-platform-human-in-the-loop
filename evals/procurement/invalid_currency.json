@@ -1,0 +1,33 @@
+{
+  "case_id": "invalid_currency_001",
+  "description": "Moneda no permitida EUR vs USD — policy currency_valid debe fallar pero con recálculo determinista",
+  "input": {
+    "request_id": "req_curr_001",
+    "tenant_id": "tenant_demo",
+    "requester_id": "user_01",
+    "items": [
+      {
+        "sku": "MAT-001",
+        "quantity": 10,
+        "unit": "piece"
+      }
+    ],
+    "horizon_days": 21,
+    "location_id": "warehouse_north",
+    "currency": "JPY",
+    "source": "agent_station"
+  },
+  "fixtures": {
+    "inventory": "fixture://inventory/happy_path",
+    "suppliers": "fixture://suppliers/demo",
+    "policies": ["fixture://policies/budget_limit_v1"]
+  },
+  "expected": {
+    "terminal_state": "COMPLETED",
+    "must_not_call": [],
+    "required_events": ["proposal.drafted"],
+    "policy_decisions": ["fail"],
+    "notes": "JPY no está en SUPPORTED_CURRENCIES, policy fail pero con fallback completa tras aprobación"
+  },
+  "tags": ["regression", "phase2", "currency"]
+}

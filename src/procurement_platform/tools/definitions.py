@@ -2,6 +2,7 @@
 
 Cada herramienta tiene input_schema y output_schema (JSON Schema) y metadata.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -12,50 +13,99 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "input": {
             "type": "object",
             "required": ["sku", "location_id"],
-            "properties": {"sku": {"type": "string"}, "location_id": {"type": "string"}, "tenant_id": {"type": "string"}},
+            "properties": {
+                "sku": {"type": "string"},
+                "location_id": {"type": "string"},
+                "tenant_id": {"type": "string"},
+            },
         },
-        "output": {"type": "object", "properties": {"on_hand": {"type": "number"}, "reserved": {"type": "number"}, "in_transit": {"type": "number"}}},
+        "output": {
+            "type": "object",
+            "properties": {
+                "on_hand": {"type": "number"},
+                "reserved": {"type": "number"},
+                "in_transit": {"type": "number"},
+            },
+        },
         "effect": "read",
         "requires_approval": False,
     },
     "get_open_purchase_orders": {
-        "input": {"type": "object", "properties": {"sku": {"type": "string"}, "location_id": {"type": "string"}}},
+        "input": {
+            "type": "object",
+            "properties": {"sku": {"type": "string"}, "location_id": {"type": "string"}},
+        },
         "output": {"type": "array", "items": {"type": "object"}},
         "effect": "read",
         "requires_approval": False,
     },
     "retrieve_policy": {
-        "input": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "tenant_id": {"type": "string"}}},
+        "input": {
+            "type": "object",
+            "required": ["query"],
+            "properties": {"query": {"type": "string"}, "tenant_id": {"type": "string"}},
+        },
         "output": {"type": "array", "items": {"type": "object"}},
         "effect": "read",
         "requires_approval": False,
     },
     "search_suppliers": {
-        "input": {"type": "object", "required": ["sku", "quantity"], "properties": {"sku": {"type": "string"}, "quantity": {"type": "number"}, "currency": {"type": "string"}}},
+        "input": {
+            "type": "object",
+            "required": ["sku", "quantity"],
+            "properties": {
+                "sku": {"type": "string"},
+                "quantity": {"type": "number"},
+                "currency": {"type": "string"},
+            },
+        },
         "output": {"type": "array", "items": {"type": "object"}},
         "effect": "read",
         "requires_approval": False,
     },
     "calculate_shortage": {
-        "input": {"type": "object", "required": ["items", "location_id", "horizon_days"], "properties": {"items": {"type": "array"}, "location_id": {"type": "string"}, "horizon_days": {"type": "integer"}}},
+        "input": {
+            "type": "object",
+            "required": ["items", "location_id", "horizon_days"],
+            "properties": {
+                "items": {"type": "array"},
+                "location_id": {"type": "string"},
+                "horizon_days": {"type": "integer"},
+            },
+        },
         "output": {"type": "array", "items": {"type": "object"}},
         "effect": "read",
         "requires_approval": False,
     },
     "create_draft_purchase_order": {
-        "input": {"type": "object", "required": ["supplier_id", "lines"], "properties": {"supplier_id": {"type": "string"}, "lines": {"type": "array"}}},
+        "input": {
+            "type": "object",
+            "required": ["supplier_id", "lines"],
+            "properties": {"supplier_id": {"type": "string"}, "lines": {"type": "array"}},
+        },
         "output": {"type": "object", "properties": {"draft_id": {"type": "string"}}},
         "effect": "write_reversible",
         "requires_approval": False,  # puede requerir según total/riesgo, lo decide policy engine
     },
     "submit_purchase_order": {
-        "input": {"type": "object", "required": ["proposal_id"], "properties": {"proposal_id": {"type": "string"}}},
-        "output": {"type": "object", "properties": {"order_id": {"type": "string"}, "status": {"type": "string"}}},
+        "input": {
+            "type": "object",
+            "required": ["proposal_id"],
+            "properties": {"proposal_id": {"type": "string"}},
+        },
+        "output": {
+            "type": "object",
+            "properties": {"order_id": {"type": "string"}, "status": {"type": "string"}},
+        },
         "effect": "write_commit",
         "requires_approval": True,
     },
     "cancel_draft_purchase_order": {
-        "input": {"type": "object", "required": ["draft_id"], "properties": {"draft_id": {"type": "string"}}},
+        "input": {
+            "type": "object",
+            "required": ["draft_id"],
+            "properties": {"draft_id": {"type": "string"}},
+        },
         "output": {"type": "object", "properties": {"status": {"type": "string"}}},
         "effect": "write_reversible",
         "requires_approval": False,

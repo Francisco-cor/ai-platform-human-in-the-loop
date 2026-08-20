@@ -1,4 +1,5 @@
 """Factory LLM con fallback Gemini → DeepSeek → fake (Fase 4)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -65,7 +66,9 @@ class LLMFactory:
                     resp.was_fallback = True
                 # validar que si se pidió schema, el content sea dict
                 if request.response_schema and not isinstance(resp.content, dict):
-                    raise LLMError(f"Respuesta no es JSON válida para schema: {resp.raw_content[:300]}")
+                    raise LLMError(
+                        f"Respuesta no es JSON válida para schema: {resp.raw_content[:300]}"
+                    )
                 return resp
             except LLMError as e:
                 last_error = e

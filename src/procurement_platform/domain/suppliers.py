@@ -2,6 +2,7 @@
 
 Determinista, sin llamadas externas, sin LLM.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -112,9 +113,7 @@ class SupplierCatalog:
         results.sort(key=lambda q: (q.unit_price, q.lead_time_days))
         return results
 
-    def best_quote(
-        self, *, sku: str, quantity: float, **kwargs
-    ) -> SupplierQuote | None:
+    def best_quote(self, *, sku: str, quantity: float, **kwargs) -> SupplierQuote | None:
         quotes = self.search(sku=sku, quantity=quantity, **kwargs)
         return quotes[0] if quotes else None
 
@@ -145,14 +144,22 @@ def build_proposal_lines_from_shortages(
         if s.shortage_qty > 0:
             qty = max(s.shortage_qty, s.requested_qty)
             if qty != s.shortage_qty:
-                assumptions.append(f"{s.sku}: qty max(shortage {s.shortage_qty}, requested {s.requested_qty}) -> {qty}")
+                assumptions.append(
+                    f"{s.sku}: qty max(shortage {s.shortage_qty}, requested {s.requested_qty}) -> {qty}"
+                )
         else:
             qty = s.requested_qty
             if s.demand_total is not None and s.total_available >= s.demand_total:
                 assumptions.append(f"{s.sku}: no shortage, using requested {qty}")
 
         quote = catalog.best_quote(
-            sku=s.sku, quantity=qty, unit=s.unit, currency=currency, tenant_id=tenant_id, location_id=location_id, horizon_days=horizon_days
+            sku=s.sku,
+            quantity=qty,
+            unit=s.unit,
+            currency=currency,
+            tenant_id=tenant_id,
+            location_id=location_id,
+            horizon_days=horizon_days,
         )
         if not quote:
             missing.append(f"no_supplier_for:{s.sku}")
@@ -181,7 +188,9 @@ def build_proposal_lines_from_shortages(
     return lines, missing, assumptions
 
 
-def load_catalog_from_fixtures(suppliers_fixture: dict, base_prices: dict | None = None) -> SupplierCatalog:
+def load_catalog_from_fixtures(
+    suppliers_fixture: dict, base_prices: dict | None = None
+) -> SupplierCatalog:
     suppliers: dict[str, Supplier] = {}
     for s in suppliers_fixture.get("suppliers", []):
         sup = Supplier(

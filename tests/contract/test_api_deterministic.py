@@ -26,7 +26,9 @@ def test_api_proposal_deterministic_shortage(client):
     assert proposal["currency"] == "USD"
     # missing_data should be empty or contain only assumptions, but no missing forecast
     # for MAT-001 with fixtures, no missing
-    assert proposal["missing_data"] == [] or all("forecast" not in m for m in proposal["missing_data"])
+    assert proposal["missing_data"] == [] or all(
+        "forecast" not in m for m in proposal["missing_data"]
+    )
     # evidence should mention determinista Fase2
     assert "determinista" in proposal["evidence"]
 

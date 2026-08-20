@@ -1,0 +1,34 @@
+{
+  "case_id": "duplicate_open_order_001",
+  "description": "Orden abierta duplicada para mismo SKU/cantidad — debe detectarse pero no duplicar tras aprobación",
+  "input": {
+    "request_id": "req_dup_001",
+    "tenant_id": "tenant_demo",
+    "requester_id": "user_01",
+    "items": [
+      {
+        "sku": "MAT-001",
+        "quantity": 15,
+        "unit": "piece"
+      }
+    ],
+    "horizon_days": 21,
+    "location_id": "warehouse_north",
+    "currency": "USD",
+    "source": "agent_station"
+  },
+  "fixtures": {
+    "inventory": "fixture://inventory/happy_path",
+    "open_orders": "fixture://open_orders/duplicate",
+    "suppliers": "fixture://suppliers/demo",
+    "policies": ["fixture://policies/budget_limit_v1"]
+  },
+  "expected": {
+    "terminal_state": "COMPLETED",
+    "must_not_call": [],
+    "required_events": ["proposal.drafted"],
+    "policy_decisions": ["pass"],
+    "notes": "Orden duplicada detectada via detect_duplicate_open_order, pero con idempotencia no duplica"
+  },
+  "tags": ["regression", "phase2", "duplicate"]
+}

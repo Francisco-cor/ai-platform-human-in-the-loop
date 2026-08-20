@@ -2,6 +2,7 @@
 
 Cada prompt tiene versión y debe ser auditable. No contiene reglas críticas (viven en policy engine).
 """
+
 from __future__ import annotations
 
 

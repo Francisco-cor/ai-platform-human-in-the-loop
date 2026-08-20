@@ -3,6 +3,7 @@
 Estos modelos son la única fuente de verdad para la comunicación externa.
 No deben importarse modelos de `domain` aquí; la traducción es explícita en el cliente.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

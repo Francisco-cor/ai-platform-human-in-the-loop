@@ -3,6 +3,7 @@
 Reglas puras, versionadas, sin LLM.
 Cada check retorna PolicyCheckResult con decision pass|fail|needs_review y blocking.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -91,7 +92,9 @@ def check_unit_supported(lines: list[ProposalLine], allowed_units: set[str]) -> 
     )
 
 
-def check_currency(lines: list[ProposalLine], proposal_currency: str, allowed: set[str]) -> PolicyCheckResult:
+def check_currency(
+    lines: list[ProposalLine], proposal_currency: str, allowed: set[str]
+) -> PolicyCheckResult:
     if proposal_currency not in allowed:
         return PolicyCheckResult(
             policy_check_id="check_currency",
@@ -107,7 +110,11 @@ def check_currency(lines: list[ProposalLine], proposal_currency: str, allowed: s
                 policy_check_id="check_currency",
                 decision="fail",
                 policy_id="currency_valid",
-                facts={"sku": li.sku, "line_currency": li.currency, "proposal_currency": proposal_currency},
+                facts={
+                    "sku": li.sku,
+                    "line_currency": li.currency,
+                    "proposal_currency": proposal_currency,
+                },
                 reason="moneda de línea distinta a propuesta",
                 blocking=True,
             )
@@ -141,7 +148,9 @@ def check_supplier_active(supplier_id: str, active_suppliers: set[str]) -> Polic
     )
 
 
-def check_supplier_allowlist(supplier_id: str, tenant_id: str, allowlist: dict[str, set[str]] | None) -> PolicyCheckResult:
+def check_supplier_allowlist(
+    supplier_id: str, tenant_id: str, allowlist: dict[str, set[str]] | None
+) -> PolicyCheckResult:
     if allowlist is None:
         return PolicyCheckResult(
             policy_check_id="check_supplier_allowlist",
@@ -171,14 +180,25 @@ def check_supplier_allowlist(supplier_id: str, tenant_id: str, allowlist: dict[s
     )
 
 
-def check_budget(total: float, tenant_id: str, location_id: str, budget_limits: dict[tuple[str, str], float]) -> PolicyCheckResult:
-    limit = budget_limits.get((tenant_id, location_id)) or budget_limits.get((tenant_id, "*")) or float("inf")
+def check_budget(
+    total: float, tenant_id: str, location_id: str, budget_limits: dict[tuple[str, str], float]
+) -> PolicyCheckResult:
+    limit = (
+        budget_limits.get((tenant_id, location_id))
+        or budget_limits.get((tenant_id, "*"))
+        or float("inf")
+    )
     if total > limit:
         return PolicyCheckResult(
             policy_check_id="check_budget",
             decision="fail",
             policy_id="budget_limit",
-            facts={"order_total": total, "delegated_limit": limit, "tenant_id": tenant_id, "location_id": location_id},
+            facts={
+                "order_total": total,
+                "delegated_limit": limit,
+                "tenant_id": tenant_id,
+                "location_id": location_id,
+            },
             reason=f"total {total} excede límite delegado {limit}",
             blocking=True,
         )
@@ -244,7 +264,9 @@ def check_duplicate(order_hash: str, existing_hashes: set[str]) -> PolicyCheckRe
     )
 
 
-def check_price_freshness(valid_until: datetime | None, now: datetime | None = None) -> PolicyCheckResult:
+def check_price_freshness(
+    valid_until: datetime | None, now: datetime | None = None
+) -> PolicyCheckResult:
     now = now or datetime.now(UTC)
     if valid_until and valid_until < now:
         return PolicyCheckResult(
@@ -290,14 +312,18 @@ def run_policy_checks(
     # Proposal no tiene tenant, usamos supplier_allowlist genérico
     if config.supplier_allowlist is not None:
         # necesitamos tenant; si no está, usamos "tenant_demo"
-        checks.append(check_supplier_allowlist(proposal.supplier_id, "tenant_demo", config.supplier_allowlist))
+        checks.append(
+            check_supplier_allowlist(proposal.supplier_id, "tenant_demo", config.supplier_allowlist)
+        )
     # 6. presupuesto — necesitamos tenant/location; usar * fallback
     # proposal.execution_id no da location; usamos presupuesto wildcard
     checks.append(check_budget(proposal.total, "tenant_demo", "*", config.budget_limits))
     # 7. limites por proveedor
     if supplier_min_max and proposal.supplier_id in supplier_min_max:
         min_q, max_q = supplier_min_max[proposal.supplier_id]
-        checks.append(check_quantity_limits_per_supplier(proposal.lines, proposal.supplier_id, min_q, max_q))
+        checks.append(
+            check_quantity_limits_per_supplier(proposal.lines, proposal.supplier_id, min_q, max_q)
+        )
     # 8. duplicado
     if existing_order_hashes is not None:
         # hash ya es scope_hash
@@ -314,7 +340,9 @@ def has_blocking_failure(checks: list[PolicyCheckResult]) -> bool:
     return any(c.blocking and c.decision == "fail" for c in checks)
 
 
-def requires_human_approval(checks: list[PolicyCheckResult], proposal_total: float, risk_level: str = "low") -> bool:
+def requires_human_approval(
+    checks: list[PolicyCheckResult], proposal_total: float, risk_level: str = "low"
+) -> bool:
     # Regla MVP: siempre requiere approval si total>0 o riesgo != low o hay fail no blocking
     if has_blocking_failure(checks):
         # si hay blocking, no se puede auto-aprobar pero igual requiere revisión humana

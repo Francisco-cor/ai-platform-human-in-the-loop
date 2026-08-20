@@ -17,10 +17,21 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
       - run: pytest -q
-      - name: eval harness (happy_path) — Fase 1
+      - name: dependency scan — Fase 7
         run: |
-          # Levanta API efímera en background para runner
-          uvicorn procurement_platform.api.main:app --port 8000 &
-          sleep 5
-          python -m procurement_platform.evals.runner --base-url http://localhost:8000 --cases-dir evals/procurement --suite happy_path || true
-          pkill -f uvicorn || true
+          pip install pip-audit
+          pip-audit --desc || echo "pip-audit found vulnerabilities (non-blocking for demo)"
+      - name: eval harness (direct, suite all) — Fase 7 (22 casos)
+        run: |
+          python -m procurement_platform.evals.runner --mode direct --suite all --output evals/reports/ci_report.json
+          cat evals/reports/ci_report.json | python -m json.tool | head -n 120
+      - name: eval gate — Fase 7 (bloquea regresión, unsafe>0, duplicate>0)
+        run: |
+          # gate contra baseline_v2 (22 casos) si existe, sino v1
+          if [ -f evals/reports/baseline_v2.json ]; then BASELINE=evals/reports/baseline_v2.json; else BASELINE=evals/reports/baseline_v1.json; fi
+          echo "Using baseline $BASELINE"
+          python -m procurement_platform.evals.runner --mode direct --suite all --gate --baseline $BASELINE
+      - name: security adversarial checks — Fase 7
+        run: |
+          python -m pytest tests/security -v
+          python -m pytest tests/integration/test_security_adversarial.py -v

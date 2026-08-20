@@ -18,7 +18,15 @@ async def test_graph_nodes_basic(db_session):
     from procurement_platform.workflows.orchestrator import WorkflowOrchestrator
 
     orch = WorkflowOrchestrator()
-    norm = NormalizedRequest(request_id=new_id("req"), tenant_id="tenant_demo", requester_id="user_01", items=[{"sku": "MAT-001", "quantity": 10, "unit": "piece"}], horizon_days=21, location_id="warehouse_north", currency="USD")
+    norm = NormalizedRequest(
+        request_id=new_id("req"),
+        tenant_id="tenant_demo",
+        requester_id="user_01",
+        items=[{"sku": "MAT-001", "quantity": 10, "unit": "piece"}],
+        horizon_days=21,
+        location_id="warehouse_north",
+        currency="USD",
+    )
     exec_obj = orch.create_execution(db, normalized=norm)
     row = db.get(WorkflowExecution, exec_obj.execution_id)
     gateway = ToolGateway()
@@ -43,7 +51,15 @@ async def test_graph_draft_proposal_with_llm(db_session):
     from procurement_platform.workflows.orchestrator import WorkflowOrchestrator
 
     orch = WorkflowOrchestrator()
-    norm = NormalizedRequest(request_id=new_id("req"), tenant_id="tenant_demo", requester_id="user_01", items=[{"sku": "MAT-001", "quantity": 10, "unit": "piece"}], horizon_days=21, location_id="warehouse_north", currency="USD")
+    norm = NormalizedRequest(
+        request_id=new_id("req"),
+        tenant_id="tenant_demo",
+        requester_id="user_01",
+        items=[{"sku": "MAT-001", "quantity": 10, "unit": "piece"}],
+        horizon_days=21,
+        location_id="warehouse_north",
+        currency="USD",
+    )
     exec_obj = orch.create_execution(db, normalized=norm)
     row = db.get(WorkflowExecution, exec_obj.execution_id)
 
@@ -60,7 +76,15 @@ async def test_graph_budget_exceeded(db_session):
     from procurement_platform.workflows.orchestrator import WorkflowOrchestrator
 
     orch = WorkflowOrchestrator()
-    norm = NormalizedRequest(request_id=new_id("req"), tenant_id="tenant_demo", requester_id="user_01", items=[{"sku": f"MAT-00{i}", "quantity": 10, "unit": "piece"} for i in range(10)], horizon_days=21, location_id="warehouse_north", currency="USD")
+    norm = NormalizedRequest(
+        request_id=new_id("req"),
+        tenant_id="tenant_demo",
+        requester_id="user_01",
+        items=[{"sku": f"MAT-00{i}", "quantity": 10, "unit": "piece"} for i in range(10)],
+        horizon_days=21,
+        location_id="warehouse_north",
+        currency="USD",
+    )
     exec_obj = orch.create_execution(db, normalized=norm)
     row = db.get(WorkflowExecution, exec_obj.execution_id)
     from procurement_platform.tools.gateway import ToolBudget

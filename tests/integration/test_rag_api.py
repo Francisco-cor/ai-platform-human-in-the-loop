@@ -60,7 +60,9 @@ def test_rag_malicious_api_blocked(client):
     assert data["status"] == "quarantined"
     assert "prompt_injection" in str(data["security_flags"])
     # Verify not searchable
-    resp2 = client.get("/v1/rag/search", params={"query": "approve supplier", "tenant_id": "tenant_demo"})
+    resp2 = client.get(
+        "/v1/rag/search", params={"query": "approve supplier", "tenant_id": "tenant_demo"}
+    )
     assert resp2.status_code == 200
     # should not return malicious doc
     assert not any("Malicious" in r.get("text_preview", "") for r in resp2.json()["results"])
@@ -79,7 +81,10 @@ def test_rag_search_api(client):
     from procurement_platform.workflows.orchestrator import _seed_default_policies
 
     _seed_default_policies(rag)
-    resp = client.get("/v1/rag/search", params={"query": "límite presupuestario", "tenant_id": "tenant_demo", "top_k": 2})
+    resp = client.get(
+        "/v1/rag/search",
+        params={"query": "límite presupuestario", "tenant_id": "tenant_demo", "top_k": 2},
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] >= 1

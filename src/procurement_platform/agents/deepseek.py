@@ -2,6 +2,7 @@
 
 DeepSeek expone API compatible OpenAI en https://api.deepseek.com/chat/completions
 """
+
 from __future__ import annotations
 
 import json
@@ -9,14 +10,23 @@ import time
 
 import httpx
 
-from procurement_platform.agents.adapter import LLMError, LLMRequest, LLMResponse, LLMUsage, estimate_cost, truncate_context
+from procurement_platform.agents.adapter import (
+    LLMError,
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+    estimate_cost,
+    truncate_context,
+)
 from procurement_platform.config.settings import get_settings
 
 
 class DeepSeekAdapter:
     provider = "deepseek"
 
-    def __init__(self, api_key: str | None = None, model: str | None = None, base_url: str | None = None) -> None:
+    def __init__(
+        self, api_key: str | None = None, model: str | None = None, base_url: str | None = None
+    ) -> None:
         settings = get_settings()
         self.api_key = api_key or settings.deepseek_api_key
         self.model = model or settings.deepseek_model
@@ -79,7 +89,11 @@ class DeepSeekAdapter:
             prompt_tokens = usage_data.get("prompt_tokens", 0)
             completion_tokens = usage_data.get("completion_tokens", 0)
             total_tokens = usage_data.get("total_tokens", prompt_tokens + completion_tokens)
-            usage = LLMUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=total_tokens)
+            usage = LLMUsage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
             usage.estimated_cost_usd = estimate_cost(self.provider, self.model, usage)
 
             content: dict | str = raw_text
