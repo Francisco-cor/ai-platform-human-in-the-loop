@@ -5,6 +5,10 @@ os.environ["PROCUREMENT_APP_ENV"] = "ci"
 os.environ["PROCUREMENT_DATABASE_URL"] = "sqlite:///./test.db"
 os.environ["PROCUREMENT_REDIS_URL"] = "redis://localhost:6379/1"
 os.environ["AGENT_STATION_CALLBACK_ENABLED"] = "false"
+os.environ["PROCUREMENT_LLM_PROVIDER"] = "fake"
+os.environ["PROCUREMENT_LLM_FALLBACK_ENABLED"] = "true"
+os.environ["GEMINI_API_KEY"] = ""
+os.environ["DEEPSEEK_API_KEY"] = ""
 
 import pytest
 from fastapi.testclient import TestClient

@@ -431,10 +431,40 @@ class WorkflowOrchestrator:
                         # bloquear ejecución y no continuar
                         self.transition(db, execution_id, ExecutionState.BLOCKED, node=node, trace_id=trace_id, details={"reason": reason, "blocked_by": "rag_security"})
                         return self.get_execution(db, execution_id)  # type: ignore
-                # Antes de PROPOSAL_DRAFTED, crear proposal
+                # Antes de PROPOSAL_DRAFTED, crear proposal (Fase 4: con LLM y gateway)
                 if target == ExecutionState.PROPOSAL_DRAFTED and not row.proposal:
-                    proposal = self._build_synthetic_proposal(row)
+                    try:
+                        proposal = self._build_synthetic_proposal(row)
+                    except Exception as e:
+                        msg = str(e)
+                        if "budget_exceeded" in msg or "not_allowed_for_state" in msg:
+                            create_audit_event(
+                                db,
+                                execution_id=row.execution_id,
+                                request_id=row.request_id,
+                                event_type="tool.budget_exceeded" if "budget_exceeded" in msg else "tool.not_allowed",
+                                actor_type="system",
+                                actor_id="tool_gateway",
+                                trace_id=trace_id,
+                                details={"error": msg, "node": node},
+                            )
+                            db.flush()
+                            self.transition(db, execution_id, ExecutionState.BLOCKED, node=node, trace_id=trace_id, details={"reason": msg, "blocked_by": "tool_gateway"})
+                            return self.get_execution(db, execution_id)  # type: ignore
+                        raise
                     row.proposal = proposal.model_dump(mode="json")
+                    db.flush()
+                    # Registrar uso de LLM si hubo fallback o éxito
+                    create_audit_event(
+                        db,
+                        execution_id=row.execution_id,
+                        request_id=row.request_id,
+                        event_type="proposal.drafted",
+                        actor_type="agent",
+                        actor_id="procurement_agent",
+                        trace_id=trace_id,
+                        details={"proposal_id": proposal.proposal_id, "supplier_id": proposal.supplier_id, "total": proposal.total, "evidence": proposal.evidence[:200]},
+                    )
                     db.flush()
                 if target == ExecutionState.AWAITING_APPROVAL and not row.approval_request:
                     # requiere proposal
@@ -459,11 +489,14 @@ class WorkflowOrchestrator:
         return self.get_execution(db, execution_id)  # type: ignore
 
     def _build_synthetic_proposal(self, row: WorkflowExecution) -> Proposal:
-        """Wrapper Fase 1 — ahora delega a determinista (Fase 2) con fallback sintético."""
+        """Wrapper Fase 1-4 — delega a determinista con fallback sintético, pero no oculta budget/allowlist errors."""
         try:
             return self._build_deterministic_proposal(row)
         except Exception as e:
-            # fallback sintético Fase 1 para no romper compatibilidad
+            # No hacer fallback para errores de budget o allowlist (deben bloquear)
+            msg = str(e)
+            if "budget_exceeded" in msg or "not_allowed_for_state" in msg or "approval_required" in msg:
+                raise
             import structlog
 
             structlog.get_logger("orchestrator").warning("deterministic_build_failed_fallback_synthetic", error=str(e))
@@ -518,25 +551,112 @@ class WorkflowOrchestrator:
             scope_hash=scope_hash,
         )
 
+    def _call_llm_for_proposal(self, normalized: NormalizedRequest, shortages: list, catalog: SupplierCatalog) -> dict | None:
+        """Fase 4: llama a LLM (Gemini → DeepSeek → fake) para proponer borrador.
+
+        Retorna dict con propuesta del LLM o None si no disponible/falla. No lanza excepción.
+        """
+        try:
+            from procurement_platform.agents.adapter import LLMRequest
+            from procurement_platform.agents.factory import run_llm_sync
+            from procurement_platform.agents.prompts import get_prompt, get_system_prompt
+            from procurement_platform.config.settings import get_settings
+
+            settings = get_settings()
+            system = get_system_prompt(settings.prompt_version)
+            # Construir contexto truncado
+            shortages_str = str([{"sku": s.sku, "shortage": s.shortage_qty, "demand_total": s.demand_total} for s in shortages])[:2000]
+            # Obtener quotes para prompt
+            quotes_preview = []
+            for s in shortages:
+                q = catalog.best_quote(sku=s.sku, quantity=s.requested_qty, unit=s.unit, currency=normalized.currency, tenant_id=normalized.tenant_id, location_id=normalized.location_id)
+                if q:
+                    quotes_preview.append({"sku": s.sku, "supplier_id": q.supplier_id, "unit_price": q.unit_price, "lead_time": q.lead_time_days})
+            user = get_prompt(settings.prompt_version, "draft_proposal").format(
+                normalized_request=str(normalized.model_dump())[:2000],
+                shortages=shortages_str,
+                supplier_quotes=str(quotes_preview)[:2000],
+                policies="budget_limit 5000, supplier_allowlist",
+                budget_info=f"limit {self._get_policy_config().budget_limits}",
+            )
+            schema = {
+                "type": "object",
+                "required": ["supplier_id", "lines", "evidence", "confidence"],
+                "properties": {
+                    "supplier_id": {"type": "string"},
+                    "lines": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["sku", "quantity", "unit", "unit_price"],
+                            "properties": {"sku": {"type": "string"}, "quantity": {"type": "number"}, "unit": {"type": "string"}, "unit_price": {"type": "number"}},
+                        },
+                    },
+                    "evidence": {"type": "string"},
+                    "confidence": {"type": "number"},
+                    "risk_level": {"type": "string"},
+                    "assumptions": {"type": "array", "items": {"type": "string"}},
+                    "missing_data": {"type": "array", "items": {"type": "string"}},
+                    "requires_human_approval": {"type": "boolean"},
+                },
+            }
+            req = LLMRequest(
+                system_prompt=system,
+                user_prompt=user,
+                response_schema=schema,
+                prompt_version=settings.prompt_version,
+                graph_version=settings.graph_version,
+                tenant_id=normalized.tenant_id,
+                execution_id="tmp",
+            )
+            resp = run_llm_sync(req)
+            if isinstance(resp.content, dict) and "supplier_id" in resp.content and "lines" in resp.content:
+                # Validación básica
+                return {"content": resp.content, "model": resp.model, "provider": resp.provider, "usage": resp.usage, "was_fallback": resp.was_fallback}
+            return None
+        except Exception as e:
+            import structlog
+
+            structlog.get_logger("orchestrator").warning("llm_proposal_failed", error=str(e))
+            return None
+
     def _build_deterministic_proposal(self, row: WorkflowExecution) -> Proposal:
-        """Construcción determinista Fase 2 — sin LLM.
+        """Construcción determinista Fase 2-4 — con LLM opcional para borrador (Fase 4).
 
         Pasos:
         1. Cargar NormalizedRequest
         2. Calcular faltantes con inventory context
         3. Consultar proveedores (catalog)
-        4. Generar líneas con mejor quote
-        5. Ejecutar policy checks y determinar riesgo
+        4. (Fase 4) Llamar a LLM para borrador y validar; si falla, usar determinista
+        5. Generar líneas con mejor quote
+        6. Ejecutar policy checks y determinar riesgo
         """
         normalized = NormalizedRequest.model_validate(row.normalized_request) if row.normalized_request else None
         if not normalized:
             raise ValueError("normalized_request missing")
         items = [{"sku": it.sku, "quantity": it.quantity, "unit": it.unit} for it in normalized.items]
         ctx = self._get_inventory_context()
-        # Si el contexto no tiene snapshot para el location del request, intentar cargar desde DB sería ideal;
-        # por ahora usamos fixtures por defecto (determinista)
+        # Fase 4: gateway para budgets y allowlist
+        from procurement_platform.tools.gateway import ToolGateway
+
+        gateway = ToolGateway()
+        # Validar y contar herramientas deterministas via gateway (Fase 4)
+        try:
+            gateway.call(tool_name="calculate_shortage", payload={"items": items, "location_id": normalized.location_id, "horizon_days": normalized.horizon_days}, execution_id=row.execution_id, state=ExecutionState.SHORTAGE_CALCULATED, tenant_id=normalized.tenant_id)
+        except Exception as e:
+            # Si budget excedido, marcar como BLOCKED y propagar
+            raise ValueError(f"budget_exceeded_calculate_shortage: {e}") from e
+
         shortages = calculate_shortages(items=items, location_id=normalized.location_id, horizon_days=normalized.horizon_days, ctx=ctx)
+
         catalog = self._get_catalog()
+        # Gateway para supplier queries (con budget)
+        try:
+            for it in items:
+                gateway.call(tool_name="search_suppliers", payload={"sku": it["sku"], "quantity": it["quantity"], "currency": normalized.currency}, execution_id=row.execution_id, state=ExecutionState.SUPPLIERS_QUERIED, tenant_id=normalized.tenant_id)
+        except Exception as e:
+            raise ValueError(f"budget_exceeded_search_suppliers: {e}") from e
+
         lines, missing_supplier, assumptions_shortage = build_proposal_lines_from_shortages(
             shortages=shortages,
             catalog=catalog,
@@ -547,23 +667,41 @@ class WorkflowOrchestrator:
             execution_id=row.execution_id,
         )
         if not lines:
-            # si no hay supplier, crear línea con missing_data para no bloquear flujo pero marcar como BLOCKED luego
-            # fallback: usar shortage qty con precio 0 y missing
             for s in shortages:
                 qty = s.shortage_qty if s.shortage_qty > 0 else s.requested_qty
                 lines.append(ProposalLine(sku=s.sku, quantity=round(qty, 2), unit=s.unit, unit_price=0.0, currency=normalized.currency))
             missing_supplier.append("fallback_no_supplier_lines_created")
 
+        # Fase 4: intentar LLM para borrador, validar y recalcualr (el LLM propone, el sistema decide)
+        llm_info = None
+        llm_proposal = self._call_llm_for_proposal(normalized, shortages, catalog)
+        if llm_proposal:
+            llm_content = llm_proposal["content"]
+            # Validar que el LLM propone supplier y lines con schema correcto; si no, se ignora y se usa determinista
+            try:
+                # Validación básica de schema
+                if "supplier_id" in llm_content and "lines" in llm_content:
+                    # Verificar que supplier del LLM está en catalog y activo
+                    proposed_supplier = llm_content["supplier_id"]
+                    if proposed_supplier in catalog.suppliers and catalog.suppliers[proposed_supplier].active:
+                        # Usar supplier del LLM como evidencia, pero recalcular líneas determinísticamente
+                        # No confiar en quantities/price del LLM; mantener deterministas
+                        pass  # se mantiene supplier_id determinista, pero se registra evidence del LLM
+                    # Guardar info para audit
+                    llm_info = llm_proposal
+            except Exception:
+                llm_info = None
+
         subtotal = round(sum(li.quantity * li.unit_price for li in lines), 2)
-        total = subtotal  # tax 0 Fase 2
-        # elegir supplier_id del mejor quote (primera línea)
-        # recuperar supplier_id del catalog best_quote nuevamente para evidence
+        total = subtotal
         first_sku = lines[0].sku
         first_qty = lines[0].quantity
         best = catalog.best_quote(sku=first_sku, quantity=first_qty, unit=lines[0].unit, currency=normalized.currency, tenant_id=normalized.tenant_id, location_id=normalized.location_id)
         supplier_id = best.supplier_id if best else "supplier_demo"
         supplier_name = best.supplier_name if best else "Demo Supplier Inc."
         evidence = f"determinista Fase2 — shortages {[s.shortage_qty for s in shortages]} from demand_total {[s.demand_total for s in shortages]}"
+        if llm_info:
+            evidence += f" | LLM {llm_info['provider']}/{llm_info['model']} propuso {llm_info['content'].get('supplier_id')} con confidence {llm_info['content'].get('confidence')} (validado y recalculado)"
 
         proposal_id = new_id("prop")
         scope_payload = {

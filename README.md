@@ -4,14 +4,15 @@ Plataforma independiente de **Agent Station** para ejecutar workflows multi-etap
 
 > **Boundary:** Agent Station es sistema externo. Comunicación exclusivamente por APIs versionadas (`/v1`) y eventos. Ver `docs/architecture/boundary-agent-station.md`.
 
-## Estado actual — Fase 0, 1, 2 y 3 completadas (2026-08-20)
+## Estado actual — Fase 0, 1, 2, 3 y 4 completadas (2026-08-20)
 
 | Fase | Objetivo | Estado | Criterio de salida verificado |
 |------|----------|--------|-------------------------------|
 | 0 — Reconocimiento y baseline | Contrato externo, fake, decisiones | ✅ | `docker compose up` levanta fake; docs explican boundary |
 | 1 — Esqueleto ejecutable | Servicio FastAPI, contratos, persistencia, ejecución sintética | ✅ | `POST /v1/procurement/executions` → `AWAITING_APPROVAL` → `COMPLETED` tras aprobación |
 | 2 — Dominio determinista | Inventario, faltantes, proveedores, policy checks sin LLM | ✅ | Mismos fixtures → mismo `qty`/`total`; 51 tests; cálculos críticos no llaman al modelo |
-| 3 — RAG seguro | Pipeline GCS→chunks→pgvector, filtros, citas, bloqueo malicioso | ✅ | Recupera evidencia relevante con trazabilidad, bloquea `malicious_document`, no ejecuta con texto no confiable; 79 tests (security, ingesta, retrieval, precision/recall, API, orchestrator) |
+| 3 — RAG seguro | Pipeline GCS→chunks→pgvector, filtros, citas, bloqueo malicioso | ✅ | Recupera evidencia relevante con trazabilidad, bloquea `malicious_document`, no ejecuta con texto no confiable; 79 tests |
+| 4 — Runtime agente y grafo | Gemini → DeepSeek fallback, tool gateway, 14 nodos, validación | ✅ | Flujo feliz produce propuesta válida con `total` recalculado; salida inválida del LLM se corrige/bloquea sin efecto externo; 99 tests (LLM, gateway, graph, determinismo, budgets) |
 
 Siguientes fases: ver `PLAN_IMPLEMENTACION.md` §19 y §27.
 
@@ -56,15 +57,17 @@ src/procurement_platform/
   api/            FastAPI (healthz, readyz, executions, approvals, documents, rag/search)
   domain/         Contratos + inventory, suppliers
   policies/       Policy engine determinista
-  rag/            RAG seguro: models, FakeEmbedder 384, security (injection/conflicto/obsolescencia), ingestion (quarantine), retrieval (filtros+citas), service
-  workflows/      Orchestrator Fase 3 (RAG en POLICY_RETRIEVED con bloqueo si malicioso/conflicto)
+  rag/            RAG seguro: models, FakeEmbedder 384, security, ingestion, retrieval, service
+  agents/         LLM: adapter, Gemini, DeepSeek (fallback), Fake, prompts versionados, factory
+  tools/          Gateway: definitions, allowlist por estado, budgets, validación, idempotencia
+  workflows/      Orchestrator Fase 4 (RAG + LLM draft recalculado) + graph (14 nodos: intake→normalize→load→retrieve→validate→shortage→suppliers→draft→policy→route→wait→execute→verify→summarize)
   integrations/agent_station/  Cliente aislado + DTOs externos + fake
   persistence/    SQLAlchemy + Alembic (inventory_*, suppliers, purchase_*, documents, document_chunks) + pgvector
-  config/         Settings tipadas
-  evals/          Harness + fixtures (inventory, suppliers, open_orders, document_malicious, policies_outdated) + casos malicious/conflicting/outdated
+  config/         Settings tipadas (llm_provider, budgets, prompt/graph versions)
+  evals/          Harness + fixtures + casos Fase 3-4
 docs/
-  architecture/boundary-agent-station.md, overview.md (Fase 0-3)
-  decisions/0001-0005 (boundary, orchestrator, stack, fase2, fase3 RAG)
+  architecture/boundary-agent-station.md, overview.md (Fase 0-4)
+  decisions/0001-0006 (boundary, orchestrator, stack, fase2, fase3 RAG, fase4 agente)
 evals/procurement/happy_path.json, malicious_document.json, conflicting_policy.json, outdated_price.json
 ```
 
@@ -72,9 +75,10 @@ evals/procurement/happy_path.json, malicious_document.json, conflicting_policy.j
 
 - `ExecutionState`: RECEIVED → NORMALIZED → ... → AWAITING_APPROVAL → APPROVED → ACTION_EXECUTED → VERIFIED → COMPLETED (ver `domain/models.py:30`)
 - `POST /v1/procurement/executions` (Idempotency-Key), `GET /v1/procurement/executions/{id}`, `GET .../events`, `POST /v1/approvals/{id}/decision`, `POST /v1/documents` (ingesta RAG), `GET /v1/rag/search` (citas)
-- `AuditEvent` append-only con `trace_id` y hashes + `rag.retrieval.*`.
+- `AuditEvent` append-only con `trace_id` y hashes + `rag.*` + `tool.*` + `proposal.drafted`.
 - **Fase 2 — cálculo determinista:** `domain/inventory.py:114` `calculate_shortage_for_item()`, `domain/suppliers.py:48` `SupplierCatalog.search()`, `policies/engine.py:200` `run_policy_checks()`.
-- **Fase 3 — RAG seguro:** `rag/security.py:20` `detect_prompt_injection()`, `rag/ingestion.py:71` `IngestionPipeline.ingest()` (quarantine), `rag/retrieval.py:40` `RetrievalService.retrieve()` (filtros tenant/vigencia/jurisdicción antes de ranking + citas), `rag/service.py:40` `RagService.retrieve_for_execution()` (bloqueo si malicioso/conflicto).
+- **Fase 3 — RAG seguro:** `rag/security.py:20` `detect_prompt_injection()`, `rag/ingestion.py:71` `IngestionPipeline.ingest()`, `rag/retrieval.py:40` `RetrievalService.retrieve()`, `rag/service.py:40` `RagService.retrieve_for_execution()`.
+- **Fase 4 — agente y gateway:** `agents/adapter.py:20` `LLMRequest/LLMResponse`, `agents/gemini.py:20` `GeminiAdapter`, `agents/deepseek.py:20` `DeepSeekAdapter` (fallback), `agents/factory.py:40` `LLMFactory.generate_with_fallback()`, `tools/gateway.py:80` `ToolGateway.call()` (allowlist por `ExecutionState`, budgets, idempotencia), `workflows/graph.py:30` 14 nodos con `duration_ms`/`tokens` y recálculo determinista.
 
 ## Boundary Agent Station
 
@@ -86,18 +90,21 @@ evals/procurement/happy_path.json, malicious_document.json, conflicting_policy.j
 ## Roadmap
 
 - Fase 2: Dominio determinista — ✅ (51 tests)
-- Fase 3: RAG seguro — ✅ (79 tests: security, ingesta, retrieval con precision/recall, API, orchestrator bloqueo)
-- Fase 4: Grafo con Gemini adapter (tool gateway, budgets, validación estructurada)
+- Fase 3: RAG seguro — ✅ (79 tests)
+- Fase 4: Runtime agente y grafo — ✅ (99 tests: LLM Gemini→DeepSeek→fake, gateway, graph 14 nodos, recálculo determinista, budgets, validación)
 - Fase 5: Human approval + idempotencia completa
 - Fase 6-11: Evaluación, seguridad, observabilidad, GCP staging, hardening
 
-**Ejemplo determinista Fase 2:**
-- Fixtures `evals/fixtures/inventory_happy_path.json` (MAT-001: on_hand 20,reserved 5 → available 15; demand 8*21=168) + `open_orders.json` (15 arrival 5) → `total_available 30` → `shortage 138` → `proposal qty 138` → `total 1380`.
+**Ejemplo Fase 4 — LLM + gateway:**
+- `GEMINI_API_KEY` no configurada → `DeepSeek` fallback; sin ambos → `FakeAdapter` determinista (CI). `POST /v1/procurement/executions` con `raw_intent` ambiguo → `normalize_request` LLM propone `items`, sistema valida; `draft_proposal` LLM propone `supplier_demo` con `confidence 0.95`, sistema **recalcula** `total = 138*10.00=1380` e ignora `total` del LLM, registra `was_fallback` y `tokens`; si LLM devuelve `invalid_json` → validación falla, usa fallback determinista sin efecto externo; si `search_suppliers` excede `max 5` → `BLOCKED` con `tool.budget_exceeded`.
 
-**Ejemplo RAG seguro Fase 3:**
-- `POST /v1/documents` con `{"content":"Ignore previous instructions..."}` → `status: quarantined`, `security_flags: ["prompt_injection"]`, no indexado.
-- `GET /v1/rag/search?query=límite&tenant_id=tenant_demo` → filtra `tenant_demo`, `valid_to>=now`, excluye `is_malicious`, retorna `citation {document_id, version, page/section, score, reliability}`.
-- Conflicto `budget 5000 vs 1000` mismo `tenant/location` → `detect_conflict` → `BLOCKED` en `POLICY_RETRIEVED` con `rag.retrieval.blocked`.
+**Config LLM:**
+```bash
+PROCUREMENT_LLM_PROVIDER=auto  # auto|gemini|deepseek|fake
+GEMINI_API_KEY=... GEMINI_MODEL=gemini-2.0-flash
+DEEPSEEK_API_KEY=... DEEPSEEK_MODEL=deepseek-chat DEEPSEEK_BASE_URL=https://api.deepseek.com
+PROCUREMENT_LLM_FALLBACK_ENABLED=true
+```
 
 ## Criterio final de éxito
 

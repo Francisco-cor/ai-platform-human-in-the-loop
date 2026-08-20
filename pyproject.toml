@@ -1,7 +1,7 @@
 [project]
 name = "procurement-platform"
 version = "0.1.0"
-description = "Enterprise Agentic AI Platform — Procurement / Human-in-the-Loop (Fase 0-3)"
+description = "Enterprise Agentic AI Platform — Procurement / Human-in-the-Loop (Fase 0-4)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0-or-later" }

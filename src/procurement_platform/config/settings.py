@@ -55,6 +55,26 @@ class Settings(BaseSettings):
         default=None, alias="PLATFORM_CALLBACK_TOKEN"
     )
 
+    # LLM / Agent (Fase 4)
+    llm_provider: Literal["auto", "gemini", "deepseek", "fake"] = Field(default="auto", alias="PROCUREMENT_LLM_PROVIDER")
+    gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
+    gemini_base_url: str = Field(default="https://generativelanguage.googleapis.com", alias="GEMINI_BASE_URL")
+    deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY")
+    deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
+    deepseek_base_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
+    llm_fallback_enabled: bool = Field(default=True, alias="PROCUREMENT_LLM_FALLBACK_ENABLED")
+    llm_max_tokens: int = Field(default=2048, alias="PROCUREMENT_LLM_MAX_TOKENS")
+    llm_temperature: float = Field(default=0.2, alias="PROCUREMENT_LLM_TEMPERATURE")
+    llm_timeout_ms: int = Field(default=15000, alias="PROCUREMENT_LLM_TIMEOUT_MS")
+    prompt_version: str = Field(default="procurement-v1", alias="PROCUREMENT_PROMPT_VERSION")
+    graph_version: str = Field(default="procurement-graph-v1", alias="PROCUREMENT_GRAPH_VERSION")
+    # Tool budgets (Fase 4)
+    max_tool_calls_per_execution: int = Field(default=20, alias="PROCUREMENT_MAX_TOOL_CALLS")
+    max_supplier_queries_per_execution: int = Field(default=5, alias="PROCUREMENT_MAX_SUPPLIER_QUERIES")
+    max_proposals_per_execution: int = Field(default=3, alias="PROCUREMENT_MAX_PROPOSALS")
+    max_tokens_per_execution: int = Field(default=8000, alias="PROCUREMENT_MAX_TOKENS_PER_EXECUTION")
+
     # Security / limits
     max_payload_bytes: int = Field(default=256 * 1024, alias="PROCUREMENT_MAX_PAYLOAD_BYTES")
     default_idempotency_ttl_seconds: int = Field(default=86400, alias="PROCUREMENT_IDEMPOTENCY_TTL")

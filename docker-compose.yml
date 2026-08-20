@@ -35,6 +35,12 @@ services:
       PROCUREMENT_LOG_LEVEL: INFO
       AGENT_STATION_BASE_URL: http://agent-station-fake:8001
       AGENT_STATION_CALLBACK_ENABLED: "false"
+      PROCUREMENT_LLM_PROVIDER: ${PROCUREMENT_LLM_PROVIDER:-auto}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      PROCUREMENT_LLM_FALLBACK_ENABLED: "true"
     ports:
       - "8000:8000"
     depends_on:
