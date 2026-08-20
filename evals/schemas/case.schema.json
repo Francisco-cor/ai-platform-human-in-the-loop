@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Evaluation Case",
+  "type": "object",
+  "required": ["case_id", "description", "input", "expected"],
+  "properties": {
+    "case_id": { "type": "string" },
+    "description": { "type": "string" },
+    "input": { "type": "object" },
+    "fixtures": { "type": "object" },
+    "expected": {
+      "type": "object",
+      "required": ["terminal_state"],
+      "properties": {
+        "terminal_state": { "type": "string" },
+        "must_not_call": { "type": "array", "items": { "type": "string" } },
+        "required_events": { "type": "array", "items": { "type": "string" } },
+        "policy_decisions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "tags": { "type": "array", "items": { "type": "string" } }
+  }
+}

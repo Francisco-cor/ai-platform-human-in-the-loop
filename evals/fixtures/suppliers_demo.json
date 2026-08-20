@@ -1,0 +1,10 @@
+{
+  "fixture": "suppliers/demo",
+  "suppliers": [
+    {"supplier_id": "supplier_demo", "name": "Demo Supplier Inc.", "active": true, "allowed_tenants": ["tenant_demo"], "currency": "USD", "min_order": 1, "max_order": 1000},
+    {"supplier_id": "supplier_alt", "name": "Alt Supplier", "active": true, "allowed_tenants": ["tenant_demo"], "currency": "USD", "min_order": 10, "max_order": 500}
+  ],
+  "quotes": [
+    {"supplier_id": "supplier_demo", "sku": "MAT-001", "unit_price": 10.0, "currency": "USD", "valid_until": "2026-12-31T00:00:00Z"}
+  ]
+}

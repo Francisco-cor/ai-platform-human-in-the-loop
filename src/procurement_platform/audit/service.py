@@ -1,0 +1,70 @@
+"""Audit service — append-only logical events (Fase 1)."""
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from procurement_platform.domain.models import AuditEvent, new_id, utcnow
+from procurement_platform.persistence.models import AuditEventRow
+
+
+def hash_payload(payload: Any) -> str:
+    raw = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def create_audit_event(
+    db: Session,
+    *,
+    execution_id: str,
+    request_id: str,
+    event_type: str,
+    actor_type: str,
+    actor_id: str,
+    tool_name: str | None = None,
+    input_payload: Any | None = None,
+    output_payload: Any | None = None,
+    policy_decisions: list[str] | None = None,
+    model_metadata: dict | None = None,
+    trace_id: str | None = None,
+    details: dict | None = None,
+) -> AuditEvent:
+    event = AuditEvent(
+        event_id=new_id("evt"),
+        execution_id=execution_id,
+        request_id=request_id,
+        event_type=event_type,
+        actor_type=actor_type,  # type: ignore
+        actor_id=actor_id,
+        tool_name=tool_name,
+        input_hash=hash_payload(input_payload) if input_payload is not None else None,
+        output_hash=hash_payload(output_payload) if output_payload is not None else None,
+        policy_decisions=policy_decisions or [],
+        model_metadata=model_metadata,
+        timestamp=utcnow(),
+        trace_id=trace_id,
+        details=details or {},
+    )
+    row = AuditEventRow(
+        event_id=event.event_id,
+        execution_id=event.execution_id,
+        request_id=event.request_id,
+        event_type=event.event_type,
+        actor_type=event.actor_type,
+        actor_id=event.actor_id,
+        tool_name=event.tool_name,
+        input_hash=event.input_hash,
+        output_hash=event.output_hash,
+        policy_decisions=event.policy_decisions,
+        model_metadata=event.model_metadata,
+        timestamp=event.timestamp,
+        trace_id=event.trace_id,
+        details=event.details,
+    )
+    db.add(row)
+    # flush but not commit — caller decides
+    db.flush()
+    return event

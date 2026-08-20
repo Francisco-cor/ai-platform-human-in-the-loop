@@ -1,0 +1,15 @@
+{
+  "policy_id": "budget_limit",
+  "version": "1.0.0",
+  "type": "financial",
+  "tenant_id": "tenant_demo",
+  "effective_from": "2025-01-01T00:00:00Z",
+  "effective_to": null,
+  "rules": {
+    "delegated_limit_usd": 5000,
+    "requires_approval_above": 0,
+    "currency": "USD"
+  },
+  "source_document": "policy_doc_001",
+  "status": "approved"
+}

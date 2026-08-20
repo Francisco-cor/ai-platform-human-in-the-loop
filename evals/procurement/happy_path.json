@@ -1,0 +1,33 @@
+{
+  "case_id": "happy_path_001",
+  "description": "Flujo feliz: solicitud con 3 semanas de horizonte genera propuesta y completa tras aprobación.",
+  "input": {
+    "request_id": "req_happy_001",
+    "tenant_id": "tenant_demo",
+    "requester_id": "user_01",
+    "raw_intent": "Necesitamos reponer materiales críticos para las próximas tres semanas.",
+    "items": [
+      {
+        "sku": "MAT-001",
+        "quantity": 120,
+        "unit": "piece"
+      }
+    ],
+    "horizon_days": 21,
+    "location_id": "warehouse_north",
+    "currency": "USD",
+    "source": "agent_station"
+  },
+  "fixtures": {
+    "inventory": "fixture://inventory/happy_path",
+    "policies": ["fixture://policies/budget_limit_v1", "fixture://policies/supplier_allowlist_v1"],
+    "suppliers": "fixture://suppliers/demo"
+  },
+  "expected": {
+    "terminal_state": "COMPLETED",
+    "must_not_call": [],
+    "required_events": ["execution.created", "execution.transition.completed"],
+    "policy_decisions": ["pass"]
+  },
+  "tags": ["happy_path", "regression", "phase1"]
+}

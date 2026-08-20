@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: pytest -q
+      - name: eval harness (happy_path) — Fase 1
+        run: |
+          # Levanta API efímera en background para runner
+          uvicorn procurement_platform.api.main:app --port 8000 &
+          sleep 5
+          python -m procurement_platform.evals.runner --base-url http://localhost:8000 --cases-dir evals/procurement --suite happy_path || true
+          pkill -f uvicorn || true
