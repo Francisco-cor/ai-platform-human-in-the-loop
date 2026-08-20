@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: procurement
+      POSTGRES_PASSWORD: procurement
+      POSTGRES_DB: procurement
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U procurement"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PROCUREMENT_APP_ENV: local
+      PROCUREMENT_DATABASE_URL: postgresql+psycopg://procurement:procurement@postgres:5432/procurement
+      PROCUREMENT_REDIS_URL: redis://redis:6379/0
+      PROCUREMENT_LOG_LEVEL: INFO
+      AGENT_STATION_BASE_URL: http://agent-station-fake:8001
+      AGENT_STATION_CALLBACK_ENABLED: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn procurement_platform.api.main:app --host 0.0.0.0 --port 8000
+
+  agent-station-fake:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      FAKE_AGENT_STATION_PORT: "8001"
+    ports:
+      - "8001:8001"
+    command: uvicorn procurement_platform.integrations.agent_station.fake_server:app --host 0.0.0.0 --port 8001
+
+volumes:
+  pgdata:
