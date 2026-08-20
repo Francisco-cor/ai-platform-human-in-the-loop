@@ -4,12 +4,13 @@ Plataforma independiente de **Agent Station** para ejecutar workflows multi-etap
 
 > **Boundary:** Agent Station es sistema externo. Comunicación exclusivamente por APIs versionadas (`/v1`) y eventos. Ver `docs/architecture/boundary-agent-station.md`.
 
-## Estado actual — Fase 0 y 1 completadas (2026-08-20)
+## Estado actual — Fase 0, 1 y 2 completadas (2026-08-20)
 
 | Fase | Objetivo | Estado | Criterio de salida verificado |
 |------|----------|--------|-------------------------------|
 | 0 — Reconocimiento y baseline | Contrato externo, fake, decisiones | ✅ | `docker compose up` levanta fake; docs explican boundary |
 | 1 — Esqueleto ejecutable | Servicio FastAPI, contratos, persistencia, ejecución sintética | ✅ | `POST /v1/procurement/executions` → `AWAITING_APPROVAL` → `COMPLETED` tras aprobación |
+| 2 — Dominio determinista | Inventario, faltantes, proveedores, policy checks sin LLM | ✅ | Mismos fixtures → mismo `qty`/`total`; 51 tests (inventario, suppliers, policies, determinismo, persistencia, API); cálculos críticos no llaman al modelo |
 
 Siguientes fases: ver `PLAN_IMPLEMENTACION.md` §19 y §27.
 
@@ -51,24 +52,26 @@ python -m procurement_platform.evals.runner  # requiere API corriendo
 
 ```
 src/procurement_platform/
-  api/            FastAPI
-  domain/         Contratos Pydantic (ExecutionState, Proposal, Approval, AuditEvent)
-  workflows/      Orchestrator (runtime propio Fase 1; LangGraph evaluado en Fase 4)
+  api/            FastAPI (healthz, readyz, executions, approvals)
+  domain/         Contratos + inventory (faltantes, unidades, coverage), suppliers (catalog, quotes), models
+  policies/       Policy engine determinista (budget, moneda, supplier, duplicado)
+  workflows/      Orchestrator determinista Fase 2 (shortage → supplier → proposal → policy checks)
   integrations/agent_station/  Cliente aislado + DTOs externos + fake
-  persistence/    SQLAlchemy + Alembic
+  persistence/    SQLAlchemy + Alembic (inventory_items, demand_forecasts, suppliers, purchase_orders)
   config/         Settings tipadas
-  evals/          Harness Fase 1
+  evals/          Harness + fixtures (inventory, suppliers, open_orders)
 docs/
-  architecture/boundary-agent-station.md
-  decisions/0001-0003
+  architecture/boundary-agent-station.md, overview.md (Fase 0-2)
+  decisions/0001-0004 (boundary, orchestrator, stack, fase2 dominio)
 evals/procurement/happy_path.json
 ```
 
 ## Contratos principales
 
-- `ExecutionState`: RECEIVED → NORMALIZED → ... → AWAITING_APPROVAL → APPROVED → ACTION_EXECUTED → VERIFIED → COMPLETED (ver `domain/models.py:19`)
+- `ExecutionState`: RECEIVED → NORMALIZED → ... → AWAITING_APPROVAL → APPROVED → ACTION_EXECUTED → VERIFIED → COMPLETED (ver `domain/models.py:30`)
 - `POST /v1/procurement/executions` (Idempotency-Key), `GET /v1/procurement/executions/{id}`, `GET .../events`, `POST /v1/approvals/{id}/decision`
 - `AuditEvent` append-only con `trace_id` y hashes.
+- **Fase 2 — cálculo determinista:** `domain/inventory.py:114` `calculate_shortage_for_item()` → `shortage = max(0, demand_total - total_available)`, unidades convertibles, `domain/suppliers.py:48` `SupplierCatalog.search()`, `policies/engine.py:200` `run_policy_checks()`.
 
 ## Boundary Agent Station
 
@@ -79,11 +82,14 @@ evals/procurement/happy_path.json
 
 ## Roadmap
 
-- Fase 2: Dominio determinista (inventario, faltantes, proveedores, policy checks)
-- Fase 3: RAG seguro
-- Fase 4: Grafo con Gemini adapter
+- Fase 2: Dominio determinista (inventario, faltantes, proveedores, policy checks) — ✅ completada (51 tests)
+- Fase 3: RAG seguro (GCS → chunks → pgvector, filtros vigencia, casos maliciosos)
+- Fase 4: Grafo con Gemini adapter (tool gateway, budgets, validación estructurada)
 - Fase 5: Human approval + idempotencia completa
 - Fase 6-11: Evaluación, seguridad, observabilidad, GCP staging, hardening
+
+**Ejemplo determinista Fase 2:**
+- Fixtures `evals/fixtures/inventory_happy_path.json` (MAT-001: on_hand 20,reserved 5 → available 15; demand 8*21=168) + `open_orders.json` (15 arrival 5) → `total_available 30` → `shortage 138` → `proposal qty 138` → `total 138*10.00=1380` (mismo fixtures → mismo resultado, sin LLM).
 
 ## Criterio final de éxito
 

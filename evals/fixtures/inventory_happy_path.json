@@ -2,7 +2,7 @@
   "fixture": "inventory/happy_path",
   "location_id": "warehouse_north",
   "items": [
-    {"sku": "MAT-001", "on_hand": 20, "reserved": 5, "in_transit": 10, "daily_demand_forecast": 8},
+    {"sku": "MAT-001", "on_hand": 20, "reserved": 5, "in_transit": 0, "daily_demand_forecast": 8},
     {"sku": "MAT-002", "on_hand": 100, "reserved": 0, "in_transit": 0, "daily_demand_forecast": 2}
   ],
   "lead_times_days": {"MAT-001": 7, "MAT-002": 5}

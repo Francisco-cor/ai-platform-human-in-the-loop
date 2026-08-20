@@ -1,4 +1,4 @@
-"""ORM models — tables for Fase 1 (executions, proposals, approvals, audit, idempotency, checkpoints)."""
+"""ORM models — tables for Fase 1-2 (executions, inventory, demand, suppliers, orders)."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -82,4 +82,80 @@ class WorkflowCheckpoint(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
-# Placeholder for future tables (policies, documents, etc.) — not needed for Fase 1
+class InventoryItem(Base):
+    __tablename__ = "inventory_items"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    sku: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    location_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    on_hand: Mapped[float] = mapped_column(nullable=False, default=0)
+    reserved: Mapped[float] = mapped_column(nullable=False, default=0)
+    in_transit: Mapped[float] = mapped_column(nullable=False, default=0)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False, default="piece")
+    lead_time_days: Mapped[int | None] = mapped_column(nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_inventory_tenant_sku_loc", "tenant_id", "sku", "location_id", unique=True),
+    )
+
+
+class DemandForecastRow(Base):
+    __tablename__ = "demand_forecasts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    sku: Mapped[str] = mapped_column(String(64), nullable=False)
+    location_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    daily_demand: Mapped[float] = mapped_column(nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False, default="piece")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_demand_tenant_sku_loc", "tenant_id", "sku", "location_id", unique=True),
+    )
+
+
+class SupplierRow(Base):
+    __tablename__ = "suppliers"
+
+    supplier_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    active: Mapped[bool] = mapped_column(nullable=False, default=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    min_order_qty: Mapped[float] = mapped_column(nullable=False, default=1)
+    max_order_qty: Mapped[float] = mapped_column(nullable=False, default=10000)
+    lead_time_days: Mapped[int] = mapped_column(nullable=False, default=7)
+    allowed_tenants: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    allowed_locations: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    unit_price_overrides: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PurchaseOrder(Base):
+    __tablename__ = "purchase_orders"
+
+    order_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    sku: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    location_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    quantity: Mapped[float] = mapped_column(nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False, default="piece")
+    supplier_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    expected_arrival_days: Mapped[int | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PurchaseOrderLine(Base):
+    __tablename__ = "purchase_order_lines"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    order_id: Mapped[str] = mapped_column(String(64), ForeignKey("purchase_orders.order_id"), nullable=False, index=True)
+    sku: Mapped[str] = mapped_column(String(64), nullable=False)
+    quantity: Mapped[float] = mapped_column(nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    unit_price: Mapped[float] = mapped_column(nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)

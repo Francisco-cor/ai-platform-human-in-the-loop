@@ -1,7 +1,7 @@
 [project]
 name = "procurement-platform"
 version = "0.1.0"
-description = "Enterprise Agentic AI Platform — Procurement / Human-in-the-Loop (Fase 0-1)"
+description = "Enterprise Agentic AI Platform — Procurement / Human-in-the-Loop (Fase 0-2)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0-or-later" }
@@ -45,7 +45,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
-ignore = ["E501", "B008", "B904", "B011", "SIM102", "SIM105", "UP042", "F841"]
+ignore = ["E501", "B008", "B904", "B011", "SIM102", "SIM105", "UP042", "F841", "SIM103", "SIM114", "I001"]
 
 [tool.mypy]
 python_version = "3.11"

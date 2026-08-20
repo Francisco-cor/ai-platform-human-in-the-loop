@@ -1,0 +1,24 @@
+{
+  "open_orders": [
+    {
+      "order_id": "po_001",
+      "sku": "MAT-001",
+      "location_id": "warehouse_north",
+      "quantity": 15,
+      "unit": "piece",
+      "supplier_id": "supplier_demo",
+      "status": "open",
+      "expected_arrival_days": 5
+    },
+    {
+      "order_id": "po_002",
+      "sku": "MAT-002",
+      "location_id": "warehouse_north",
+      "quantity": 20,
+      "unit": "piece",
+      "supplier_id": "supplier_alt",
+      "status": "open",
+      "expected_arrival_days": 25
+    }
+  ]
+}
