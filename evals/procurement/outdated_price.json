@@ -1,0 +1,33 @@
+{
+  "case_id": "outdated_price_001",
+  "description": "Política de precio vencida no debe superar a política vigente aunque tenga mejor score",
+  "input": {
+    "request_id": "req_outdated_001",
+    "tenant_id": "tenant_demo",
+    "requester_id": "user_01",
+    "items": [
+      {
+        "sku": "MAT-001",
+        "quantity": 50,
+        "unit": "piece"
+      }
+    ],
+    "horizon_days": 21,
+    "location_id": "warehouse_north",
+    "currency": "USD",
+    "source": "agent_station"
+  },
+  "fixtures": {
+    "inventory": "fixture://inventory/happy_path",
+    "policies": ["fixture://policies/budget_limit_v1", "fixture://policies/outdated_supplier_price"],
+    "suppliers": "fixture://suppliers/demo"
+  },
+  "expected": {
+    "terminal_state": "COMPLETED",
+    "must_not_call": [],
+    "required_events": ["rag.retrieval.completed"],
+    "policy_decisions": ["pass"],
+    "notes": "La política vencida debe ser filtrada por valid_to < now y no usada para decisión"
+  },
+  "tags": ["rag", "regression", "phase3", "obsolescence"]
+}

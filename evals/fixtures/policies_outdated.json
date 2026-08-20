@@ -1,0 +1,16 @@
+{
+  "policy_id": "outdated_supplier_price",
+  "version": "0.9.0",
+  "type": "pricing",
+  "tenant_id": "tenant_demo",
+  "effective_from": "2023-01-01T00:00:00Z",
+  "effective_to": "2024-01-01T00:00:00Z",
+  "rules": {
+    "sku": "MAT-001",
+    "unit_price": 5.0,
+    "currency": "USD"
+  },
+  "source_document": "doc_outdated_001",
+  "status": "approved",
+  "notes": "Vencida, no debe superar a vigente aunque tenga mejor score"
+}

@@ -1,4 +1,4 @@
-"""ORM models — tables for Fase 1-2 (executions, inventory, demand, suppliers, orders)."""
+"""ORM models — tables for Fase 1-3 (executions, inventory, demand, suppliers, orders, RAG)."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -159,3 +159,63 @@ class PurchaseOrderLine(Base):
     unit: Mapped[str] = mapped_column(String(32), nullable=False)
     unit_price: Mapped[float] = mapped_column(nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
+
+
+class DocumentRow(Base):
+    __tablename__ = "documents"
+
+    document_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    doc_type: Mapped[str] = mapped_column(String(32), nullable=False, default="policy")
+    classification: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
+    jurisdiction: Mapped[str] = mapped_column(String(32), nullable=False, default="global")
+    location_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    version: Mapped[str] = mapped_column(String(32), nullable=False, default="1.0.0")
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="approved")
+    allowed_tenants: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    allowed_roles: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    pipeline_version: Mapped[str] = mapped_column(String(32), nullable=False, default="rag-v1")
+    content_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    security_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    is_malicious: Mapped[bool] = mapped_column(nullable=False, default=False)
+    content: Mapped[str] = mapped_column(JSON, nullable=False)  # store as text (could be large)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_documents_tenant_status", "tenant_id", "status"),
+    )
+
+
+class DocumentChunkRow(Base):
+    __tablename__ = "document_chunks"
+
+    chunk_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    document_id: Mapped[str] = mapped_column(String(64), ForeignKey("documents.document_id"), nullable=False, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    chunk_index: Mapped[int] = mapped_column(nullable=False)
+    section: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    page: Mapped[int | None] = mapped_column(nullable=True)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    classification: Mapped[str] = mapped_column(String(32), nullable=False)
+    jurisdiction: Mapped[str] = mapped_column(String(32), nullable=False)
+    location_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    policy_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reliability: Mapped[str] = mapped_column(String(32), nullable=False, default="high")
+    is_malicious: Mapped[bool] = mapped_column(nullable=False, default=False)
+    security_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    text: Mapped[str] = mapped_column(JSON, nullable=False)
+    embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)  # fake-384 as JSON; pgvector would be vector(384)
+    embedding_model: Mapped[str] = mapped_column(String(64), nullable=False, default="fake-384")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index("ix_chunks_tenant_policy", "tenant_id", "policy_type"),
+    )

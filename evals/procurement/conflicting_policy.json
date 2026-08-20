@@ -1,0 +1,33 @@
+{
+  "case_id": "conflicting_policy_001",
+  "description": "Dos políticas autorizadas contradicen límite presupuestario — debe escalar y no resolver por preferencia textual",
+  "input": {
+    "request_id": "req_conflict_001",
+    "tenant_id": "tenant_demo",
+    "requester_id": "user_01",
+    "items": [
+      {
+        "sku": "MAT-001",
+        "quantity": 100,
+        "unit": "piece"
+      }
+    ],
+    "horizon_days": 21,
+    "location_id": "warehouse_north",
+    "currency": "USD",
+    "source": "agent_station"
+  },
+  "fixtures": {
+    "inventory": "fixture://inventory/happy_path",
+    "policies": ["fixture://policies/budget_limit_5000", "fixture://policies/budget_limit_1000"],
+    "suppliers": "fixture://suppliers/demo"
+  },
+  "expected": {
+    "terminal_state": "BLOCKED",
+    "must_not_call": ["submit_purchase_order"],
+    "required_events": ["rag.retrieval.blocked"],
+    "policy_decisions": ["fail"],
+    "notes": "Conflicto detectado por detect_conflict, requiere revisión humana, no auto-resolución"
+  },
+  "tags": ["rag", "regression", "phase3", "conflict"]
+}

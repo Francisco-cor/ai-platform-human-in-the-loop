@@ -1,18 +1,20 @@
-"""Workflow orchestrator — runtime propio (Fase 1-2).
+"""Workflow orchestrator — runtime propio (Fase 1-3).
 
 Grafo lineal determinista:
 RECEIVED -> NORMALIZED -> CONTEXT_LOADED -> ... -> COMPLETED
 Fase 1: grafo sintético sin LLM.
 Fase 2: cálculo determinista de faltantes, proveedores y policy checks — sin LLM.
+Fase 3: RAG seguro con filtros, citas y bloqueo de contenido malicioso — sin LLM para decisiones.
 
-Contratos §5 y §7. Cálculos críticos no llaman al modelo (Fase 2 criterio salida).
+Contratos §5 y §7. Cálculos críticos no llaman al modelo (Fase 2-3 criterio salida).
 """
 from __future__ import annotations
 
 import hashlib
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -41,6 +43,18 @@ from procurement_platform.domain.suppliers import (
 )
 from procurement_platform.persistence.models import WorkflowCheckpoint, WorkflowExecution
 from procurement_platform.policies.engine import PolicyConfig, run_policy_checks
+
+# Fase 3 RAG
+try:
+    from procurement_platform.rag.models import Document, DocumentMetadata
+    from procurement_platform.rag.service import RagService
+
+    _has_rag = True
+except Exception:
+    Document = None  # type: ignore
+    DocumentMetadata = None  # type: ignore
+    RagService = None  # type: ignore
+    _has_rag = False
 
 
 def _serialize_execution(exec_obj: WorkflowExecution) -> Execution:
@@ -125,8 +139,69 @@ def _load_default_policy_config() -> PolicyConfig:
     return PolicyConfig(budget_limits={("tenant_demo", "*"): 5000.0, ("tenant_demo", "warehouse_north"): 5000.0})
 
 
+_global_rag_service = None
+
+
+def get_rag_service():
+    global _global_rag_service
+    if _global_rag_service is None and _has_rag:
+        # lazy init con embedding fake
+        _global_rag_service = RagService()
+        # seed con políticas por defecto si está vacío (Fase 3)
+        if _global_rag_service.retrieval.count() == 0:
+            try:
+                _seed_default_policies(_global_rag_service)
+            except Exception:
+                pass
+    return _global_rag_service
+
+
+def _seed_default_policies(rag: Any) -> None:
+    """Seed determinista de políticas para que retrieval tenga datos sin DB."""
+    from procurement_platform.rag.models import Document, DocumentMetadata
+
+    # Política vigente: budget_limit
+    doc1 = Document(
+        metadata=DocumentMetadata(
+            document_id="policy_budget_v1",
+            tenant_id="tenant_demo",
+            title="Política de límite presupuestario",
+            doc_type="policy",
+            classification="internal",
+            jurisdiction="global",
+            location_id="warehouse_north",
+            version="1.0.0",
+            valid_from=datetime(2025, 1, 1, tzinfo=UTC),
+            valid_to=None,
+            status="approved",
+            allowed_tenants=["tenant_demo"],
+        ),
+        content="Política: El límite delegado para tenant_demo en warehouse_north es 5000 USD. Toda orden por encima requiere aprobación humana. Esta política es normativa y vigente.",
+        pages=[{"page": 1, "section": "budget", "text": "límite 5000 USD"}],
+    )
+    # Política vigente: supplier allowlist
+    doc2 = Document(
+        metadata=DocumentMetadata(
+            document_id="policy_supplier_allowlist_v1",
+            tenant_id="tenant_demo",
+            title="Proveedores permitidos",
+            doc_type="policy",
+            classification="internal",
+            jurisdiction="global",
+            version="1.0.0",
+            valid_from=datetime(2025, 1, 1, tzinfo=UTC),
+            status="approved",
+            allowed_tenants=["tenant_demo"],
+        ),
+        content="Política: Proveedores permitidos para tenant_demo son supplier_demo y supplier_alt. Proveedor activo requerido.",
+        pages=[{"page": 1, "section": "suppliers", "text": "allowlist"}],
+    )
+    for doc in (doc1, doc2):
+        rag.ingest_document(document=doc, actor_id="seed")
+
+
 class WorkflowOrchestrator:
-    """Orquestador sincrónico — Fase 1-2 (sin LLM para cálculos críticos)."""
+    """Orquestador sincrónico — Fase 1-3 (sin LLM para cálculos críticos y RAG seguro)."""
 
     def __init__(
         self,
@@ -134,10 +209,12 @@ class WorkflowOrchestrator:
         inventory_context: InventoryContext | None = None,
         supplier_catalog: SupplierCatalog | None = None,
         policy_config: PolicyConfig | None = None,
+        rag_service: Any | None = None,
     ) -> None:
         self._inventory_context = inventory_context
         self._supplier_catalog = supplier_catalog
         self._policy_config = policy_config
+        self._rag_service = rag_service
 
     def _get_inventory_context(self) -> InventoryContext:
         return self._inventory_context or _load_default_inventory_context()
@@ -147,6 +224,37 @@ class WorkflowOrchestrator:
 
     def _get_policy_config(self) -> PolicyConfig:
         return self._policy_config or _load_default_policy_config()
+
+    def _get_rag_service(self):
+        if self._rag_service is not None:
+            return self._rag_service
+        return get_rag_service()
+
+    def _retrieve_policies_for_execution(self, row: WorkflowExecution, trace_id: str | None = None) -> tuple[list, bool, str]:
+        """Fase 3: recupera políticas via RAG con filtros tenant/vigencia y valida seguridad.
+
+        Retorna (results, should_block, reason) y registra audit.
+        """
+        rag = self._get_rag_service()
+        if rag is None:
+            return [], False, "rag_not_configured"
+        normalized = NormalizedRequest.model_validate(row.normalized_request) if row.normalized_request else None
+        if not normalized:
+            return [], False, "no_normalized"
+        # query RAG: buscar políticas de presupuesto y proveedores para este tenant/location
+        try:
+            results, should_block, reason = rag.retrieve_for_execution(
+                query=f"políticas presupuesto y proveedores para {normalized.tenant_id} {normalized.location_id}",
+                tenant_id=normalized.tenant_id,
+                location_id=normalized.location_id,
+                top_k=5,
+            )
+            return results, should_block, reason
+        except Exception as e:
+            import structlog
+
+            structlog.get_logger("orchestrator").warning("rag_retrieval_failed", error=str(e))
+            return [], False, f"retrieval_error:{e}"
 
     def create_execution(
         self,
@@ -304,7 +412,26 @@ class WorkflowOrchestrator:
         for target, node in seq:
             cur = ExecutionState(db.get(WorkflowExecution, execution_id).status)  # type: ignore
             if is_valid_transition(cur, target):
-                # Antes de PROPOSAL_DRAFTED, crear proposal stub
+                # Fase 3: RAG retrieval en POLICY_RETRIEVED con validación de seguridad
+                if target == ExecutionState.POLICY_RETRIEVED:
+                    results, should_block, reason = self._retrieve_policies_for_execution(row, trace_id=trace_id)
+                    # registrar audit de retrieval
+                    create_audit_event(
+                        db,
+                        execution_id=row.execution_id,
+                        request_id=row.request_id,
+                        event_type="rag.retrieval.completed" if not should_block else "rag.retrieval.blocked",
+                        actor_type="system",
+                        actor_id="rag_service",
+                        trace_id=trace_id,
+                        details={"results": len(results), "should_block": should_block, "reason": reason, "citations": [r.citation if hasattr(r, "citation") else str(r) for r in results[:2]]},
+                    )
+                    db.flush()
+                    if should_block:
+                        # bloquear ejecución y no continuar
+                        self.transition(db, execution_id, ExecutionState.BLOCKED, node=node, trace_id=trace_id, details={"reason": reason, "blocked_by": "rag_security"})
+                        return self.get_execution(db, execution_id)  # type: ignore
+                # Antes de PROPOSAL_DRAFTED, crear proposal
                 if target == ExecutionState.PROPOSAL_DRAFTED and not row.proposal:
                     proposal = self._build_synthetic_proposal(row)
                     row.proposal = proposal.model_dump(mode="json")

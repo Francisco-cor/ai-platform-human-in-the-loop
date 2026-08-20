@@ -1,4 +1,4 @@
-"""FastAPI app — Fase 1 esqueleto ejecutable."""
+"""FastAPI app — Fase 1-3 skeleton con RAG seguro."""
 from __future__ import annotations
 
 import time
@@ -22,7 +22,7 @@ from procurement_platform.domain.models import (
 from procurement_platform.observability.logging import configure_logging, get_logger
 from procurement_platform.persistence.database import get_db, init_db
 from procurement_platform.persistence.models import AuditEventRow, IdempotencyKey, WorkflowExecution
-from procurement_platform.workflows.orchestrator import WorkflowOrchestrator
+from procurement_platform.workflows.orchestrator import WorkflowOrchestrator, get_rag_service
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -31,7 +31,7 @@ logger = get_logger("api")
 app = FastAPI(
     title="procurement-platform",
     version="0.1.0",
-    description="Enterprise Agentic AI Platform — Fase 0-1 skeleton",
+    description="Enterprise Agentic AI Platform — Fase 0-3 con RAG seguro",
 )
 
 orchestrator = WorkflowOrchestrator()
@@ -353,9 +353,106 @@ def decide_approval(
 
 
 @app.post("/v1/documents", tags=["documents"])
-def upload_document(payload: dict, request: Request):
-    # Fase 1 stub — validates size and returns accepted
-    return {"status": "accepted", "document_id": new_id("doc"), "request_id": request.state.request_id}
+def upload_document(payload: dict, request: Request, db: Session = Depends(get_db)):
+    """Ingesta RAG Fase 3: valida, clasifica, detecta injection y genera embeddings."""
+    from datetime import UTC, datetime
+
+    from procurement_platform.rag.models import Document, DocumentMetadata
+
+    # payload esperado: {tenant_id, title, content, doc_type, classification, jurisdiction, version, valid_from, valid_to, ...}
+    tenant_id = payload.get("tenant_id", "tenant_demo")
+    title = payload.get("title", "Untitled")
+    content = payload.get("content", "")
+    if not content or len(content.strip()) < 10:
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "content too short"})
+
+    doc_type = payload.get("doc_type", "policy")
+    classification = payload.get("classification", "internal")
+    jurisdiction = payload.get("jurisdiction", "global")
+    version = payload.get("version", "1.0.0")
+    location_id = payload.get("location_id")
+    # parse valid_from/to if provided as ISO
+    def parse_dt(v):
+        if not v:
+            return None
+        try:
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    valid_from = parse_dt(payload.get("valid_from")) or datetime.now(UTC)
+    valid_to = parse_dt(payload.get("valid_to"))
+
+    metadata = DocumentMetadata(
+        document_id=payload.get("document_id") or new_id("doc"),
+        tenant_id=tenant_id,
+        title=title,
+        doc_type=doc_type,  # type: ignore
+        classification=classification,  # type: ignore
+        jurisdiction=jurisdiction,
+        location_id=location_id,
+        version=version,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        status=payload.get("status", "approved"),  # type: ignore
+        allowed_tenants=payload.get("allowed_tenants", [tenant_id]),
+    )
+    document = Document(metadata=metadata, content=content, pages=payload.get("pages", []))
+
+    rag = get_rag_service()
+    status, chunks = rag.ingest_document(document=document, filename=payload.get("filename"), actor_id=request.state.request_id, db=db)
+
+    # audit
+    create_audit_event(
+        db,
+        execution_id="no_exec",
+        request_id=request.state.request_id,
+        event_type=f"rag.ingestion.{status}",
+        actor_type="system",
+        actor_id="rag_service",
+        trace_id=request.state.trace_id,
+        details={"document_id": metadata.document_id, "chunks": len(chunks), "status": status, "security_flags": document.metadata.security_flags},
+    )
+    db.commit()
+
+    http_status = 200 if status == "indexed" else 409 if status == "duplicate" else 422 if status in ("rejected", "quarantined") else 200
+    return JSONResponse(
+        status_code=http_status,
+        content={
+            "status": status,
+            "document_id": metadata.document_id,
+            "chunks_created": len(chunks),
+            "content_hash": document.metadata.content_hash,
+            "security_flags": document.metadata.security_flags,
+            "is_malicious": document.metadata.is_malicious,
+            "request_id": request.state.request_id,
+        },
+    )
+
+
+@app.get("/v1/rag/search", tags=["rag"])
+def rag_search(
+    query: str,
+    tenant_id: str = "tenant_demo",
+    location_id: str | None = None,
+    jurisdiction: str | None = None,
+    top_k: int = 5,
+    db: Session = Depends(get_db),
+):
+    """Endpoint de debug para RAG — Fase 3 (no expone documentos fuera de permiso)."""
+    rag = get_rag_service()
+    res = rag.retrieve(query=query, tenant_id=tenant_id, location_id=location_id, jurisdiction=jurisdiction, top_k=top_k)
+    # no exponer texto completo si es confidencial; aquí retornamos citas y scores
+    return {
+        "query": query,
+        "count": res["count"],
+        "results": [
+            {"citation": r.citation, "score": r.score, "reliability": r.chunk.metadata.reliability, "is_malicious": r.chunk.metadata.is_malicious, "text_preview": r.chunk.text[:200]}
+            for r in res["results"]
+        ],
+        "warnings": res["warnings"],
+        "conflict": res["conflict"],
+    }
 
 
 # ---------------------------------------------------------------------------
