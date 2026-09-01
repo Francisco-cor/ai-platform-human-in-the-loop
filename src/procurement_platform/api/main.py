@@ -54,7 +54,7 @@ async def add_request_context(request: Request, call_next):
     request.state.request_id = request_id
     request.state.trace_id = trace_id
 
-    # payload size guard (Fase 7: estricto)
+    # payload size guard (F1-4: streaming + content-length)
     cl = request.headers.get("content-length")
     if cl and cl.isdigit():
         if int(cl) > settings.max_payload_bytes:
@@ -66,6 +66,22 @@ async def add_request_context(request: Request, call_next):
                     "request_id": request_id,
                 },
             )
+    # streaming guard: read body and enforce limit even if client omits content-length (chunked)
+    if request.method in ("POST", "PUT", "PATCH") and request.url.path.startswith("/v1/"):
+        try:
+            body = await request.body()
+            if len(body) > settings.max_payload_bytes:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "code": "payload_too_large",
+                        "message": f"payload exceeds limit {settings.max_payload_bytes} bytes (actual {len(body)})",
+                        "request_id": request_id,
+                    },
+                )
+            # body is cached by Starlette, downstream will still see it
+        except Exception:
+            pass
 
     # Fase 7: rate limit por tenant/IP para POST /v1/procurement/executions
     if request.method == "POST" and request.url.path.startswith("/v1/procurement/executions"):
@@ -295,22 +311,50 @@ def list_events(
         raise HTTPException(
             status_code=404, detail={"code": "not_found", "message": "execution not found"}
         )
-    q = (
+    # clamp limit 1..100
+    limit = max(1, min(limit, 100))
+    # stable ordering: timestamp asc, event_id asc (deterministic for same timestamp)
+    base_q = (
         db.query(AuditEventRow)
         .filter(AuditEventRow.execution_id == execution_id)
-        .order_by(AuditEventRow.timestamp.asc())
+        .order_by(AuditEventRow.timestamp.asc(), AuditEventRow.event_id.asc())
     )
-    # naive cursor: event_id
+    # total count for header
+    total = base_q.count()
+    q = base_q
+    # cursor: event_id — find timestamp and filter > timestamp or = timestamp and id > cursor
     if cursor:
-        # find timestamp of cursor event
         cur_row = db.get(AuditEventRow, cursor)
         if cur_row:
-            q = q.filter(AuditEventRow.timestamp > cur_row.timestamp)
-    rows = q.limit(min(limit, 100)).all()
-    next_cursor = rows[-1].event_id if len(rows) == min(limit, 100) else None
+            # stable cursor: rows with timestamp > cur.timestamp OR (timestamp == cur.timestamp AND event_id > cur.event_id)
+            q = q.filter(
+                (AuditEventRow.timestamp > cur_row.timestamp)
+                | (
+                    (AuditEventRow.timestamp == cur_row.timestamp)
+                    & (AuditEventRow.event_id > cur_row.event_id)
+                )
+            )
+    rows = q.limit(limit).all()
+    # has_more: if we got limit rows and total > offset, check if more remain
+    has_more = len(rows) == limit and total > len(rows)
+    # if cursor present, need to check remaining beyond rows
+    if cursor and rows:
+        # compute remaining count heuristic: total filtered vs rows
+        has_more = base_q.filter(
+            AuditEventRow.timestamp > rows[-1].timestamp
+        ).count() > 0 or base_q.filter(
+            (AuditEventRow.timestamp == rows[-1].timestamp)
+            & (AuditEventRow.event_id > rows[-1].event_id)
+        ).count() > 0
+        # simplify: if we got limit rows, assume may have more
+        has_more = len(rows) == limit
+    next_cursor = rows[-1].event_id if has_more else None
     return {
         "execution_id": execution_id,
         "count": len(rows),
+        "total": total,
+        "limit": limit,
+        "has_more": has_more,
         "events": [
             {
                 "event_id": r.event_id,
