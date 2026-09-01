@@ -197,6 +197,7 @@ class DocumentRow(Base):
     security_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
     is_malicious: Mapped[bool] = mapped_column(nullable=False, default=False)
     content: Mapped[str] = mapped_column(JSON, nullable=False)  # store as text (could be large)
+    gcs_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)  # F4-6 GCS source
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
@@ -230,7 +231,12 @@ class DocumentChunkRow(Base):
     embedding: Mapped[list | None] = mapped_column(
         JSON, nullable=True
     )  # fake-384 as JSON; pgvector would be vector(384)
+    # F4-2: pgvector HNSW column — in Postgres vector(384), in SQLite JSON mirror (F4 compat)
+    embedding_vec: Mapped[list | None] = mapped_column(JSON, nullable=True)
     embedding_model: Mapped[str] = mapped_column(String(64), nullable=False, default="fake-384")
+    # F4-5: feedback boosting
+    feedback_score: Mapped[float] = mapped_column(nullable=False, default=0.0, server_default="0")
+    feedback_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
@@ -244,11 +250,17 @@ class OutboxEvent(Base):
     __tablename__ = "outbox_events"
 
     event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    aggregate_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)  # execution_id
+    aggregate_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True
+    )  # execution_id
     event_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     attempts: Mapped[int] = mapped_column(nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
