@@ -22,6 +22,7 @@ from procurement_platform.domain.models import (
 from procurement_platform.observability.logging import configure_logging, get_logger
 from procurement_platform.persistence.database import get_db, init_db
 from procurement_platform.persistence.models import AuditEventRow, IdempotencyKey, WorkflowExecution
+from procurement_platform.security.auth import Principal, get_current_principal
 from procurement_platform.workflows.orchestrator import WorkflowOrchestrator, get_rag_service
 
 settings = get_settings()
@@ -204,6 +205,7 @@ def create_execution(
     request: Request,
     db: Session = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    principal: Principal = Depends(get_current_principal),
 ):
     # Fase 7: rate limit hit por tenant (después de parsear payload)
     try:
@@ -218,6 +220,12 @@ def create_execution(
             raise HTTPException(status_code=429, detail={"code": "rate_limited", "message": str(e)})
         # no bloquear por errores de limiter
         pass
+    # F3-1: tenant isolation via principal (if authenticated, must match payload tenant)
+    if principal.auth_method != "anonymous" and principal.tenant_id != payload.tenant_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "tenant_forbidden", "message": f"principal tenant {principal.tenant_id} != payload {payload.tenant_id}"},
+        )
     # idempotency: buscar key
     key = idempotency_key or payload.idempotency_key
     if key:

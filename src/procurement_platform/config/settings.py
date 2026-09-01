@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     async_enabled: bool = Field(default=False, alias="PROCUREMENT_ASYNC_ENABLED")
     worker_concurrency: int = Field(default=4, alias="PROCUREMENT_WORKER_CONCURRENCY")
 
+    # Auth (F3-1)
+    jwt_secret: str | None = Field(default=None, alias="PROCUREMENT_JWT_SECRET")
+
     @property
     def is_local(self) -> bool:
         return self.app_env == "local"
