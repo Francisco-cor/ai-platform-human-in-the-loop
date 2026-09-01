@@ -236,3 +236,20 @@ class DocumentChunkRow(Base):
     )
 
     __table_args__ = (Index("ix_chunks_tenant_policy", "tenant_id", "policy_type"),)
+
+
+class OutboxEvent(Base):
+    """Transactional outbox for audit/BQ/GCS/webhooks (F2-1)."""
+
+    __tablename__ = "outbox_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    aggregate_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)  # execution_id
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    __table_args__ = (Index("ix_outbox_unprocessed", "processed_at", "created_at"),)
