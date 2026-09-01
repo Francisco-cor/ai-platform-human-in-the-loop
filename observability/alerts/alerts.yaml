@@ -1,0 +1,59 @@
+# F5-5 SLO alerts — Prometheus Alertmanager
+groups:
+  - name: procurement.slo
+    interval: 30s
+    rules:
+      - alert: Http5xxHigh
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.01
+        for: 2m
+        labels:
+          severity: critical
+          slo: availability
+        annotations:
+          summary: "HTTP 5xx >1% (burn rate high)"
+          description: "Error rate {{ $value | humanizePercentage }} por 5m, burn {{ $value | humanize }}"
+
+      - alert: P95LatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 2
+        for: 3m
+        labels:
+          severity: warning
+          slo: latency
+        annotations:
+          summary: "p95 latency >2s"
+          description: "p95={{ $value }}s"
+
+      - alert: ApprovalBacklogHigh
+        expr: sum(approval_pending_total) > 50
+        for: 5m
+        labels:
+          severity: warning
+          slo: approval
+        annotations:
+          summary: "Backlog aprobaciones >50"
+          description: "pending={{ $value }}"
+
+      - alert: BudgetExceededHigh
+        expr: sum(rate(budget_exceeded_total[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Budget exceeded rate high"
+          description: "rate={{ $value }}/s"
+
+      - alert: RagLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(rag_retrieval_latency_seconds_bucket[5m]))) > 0.5
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG p95 >500ms"
+
+      - alert: SLOBurnRateHigh
+        expr: (sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))) / 0.001 > 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SLO burn rate >5"

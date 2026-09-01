@@ -81,17 +81,83 @@ def truncate_context(text: str, max_chars: int) -> str:
     return text[:half] + "\n...[truncated]...\n" + text[-half:]
 
 
+class BudgetExhausted(RuntimeError):
+    """F5-4: presupuesto tokens/coste excedido para tenant/execution."""
+
+    pass
+
+
+_cost_rates_cache: dict | None = None
+_cost_rates_version: str | None = None
+
+
+def _load_cost_rates() -> dict:
+    global _cost_rates_cache, _cost_rates_version
+    if _cost_rates_cache is not None:
+        return _cost_rates_cache
+    # try yaml
+    try:
+        import pathlib
+        import yaml  # type: ignore
+
+        p = pathlib.Path("config/cost_rates.yaml")
+        if not p.exists():
+            p = pathlib.Path("src/procurement_platform/config/cost_rates.yaml")
+        if p.exists():
+            data = yaml.safe_load(p.read_text(encoding="utf-8"))
+            _cost_rates_cache = data
+            _cost_rates_version = str(data.get("version", "v1"))
+            return data
+    except Exception:
+        pass
+    # fallback hard-coded
+    _cost_rates_cache = {
+        "version": "v1",
+        "rates": {
+            "gemini": {"gemini-2.0-flash": {"prompt_per_1k": 0.075, "completion_per_1k": 0.30}},
+            "deepseek": {
+                "deepseek-chat": {"prompt_per_1k": 0.14, "completion_per_1k": 0.28},
+                "deepseek-reasoner": {"prompt_per_1k": 0.55, "completion_per_1k": 2.19},
+            },
+            "fake": {"fake": {"prompt_per_1k": 0.0, "completion_per_1k": 0.0}},
+        },
+    }
+    return _cost_rates_cache
+
+
+def get_cost_rates_version() -> str:
+    data = _load_cost_rates()
+    return str(data.get("version", "v1"))
+
+
 def estimate_cost(provider: str, model: str, usage: LLMUsage) -> float:
-    # tarifas versionadas simplificadas (USD por 1K tokens)
-    rates = {
+    data = _load_cost_rates()
+    rates = data.get("rates", {})
+    # try exact
+    prov = rates.get(provider, {})
+    mdl = prov.get(model) if isinstance(prov, dict) else None
+    if mdl and "prompt_per_1k" in mdl:
+        pr = float(mdl["prompt_per_1k"]) / 1000
+        cr = float(mdl["completion_per_1k"]) / 1000
+        return usage.prompt_tokens * pr + usage.completion_tokens * cr
+    # fallback default
+    default = rates.get("default", {"prompt_per_1k": 0.10, "completion_per_1k": 0.30})
+    pr = float(default.get("prompt_per_1k", 0.10)) / 1000
+    cr = float(default.get("completion_per_1k", 0.30)) / 1000
+    # also try hardcoded legacy
+    legacy = {
         ("gemini", "gemini-2.0-flash"): (0.075 / 1000, 0.30 / 1000),
         ("deepseek", "deepseek-chat"): (0.14 / 1000, 0.28 / 1000),
         ("deepseek", "deepseek-reasoner"): (0.55 / 1000, 2.19 / 1000),
         ("fake", "fake"): (0.0, 0.0),
     }
-    key = (provider, model)
-    if key not in rates:
-        # fallback genérico
-        return 0.0
-    prompt_rate, completion_rate = rates[key]
-    return usage.prompt_tokens * prompt_rate + usage.completion_tokens * completion_rate
+    if (provider, model) in legacy:
+        pr, cr = legacy[(provider, model)]
+        return usage.prompt_tokens * pr + usage.completion_tokens * cr
+    return usage.prompt_tokens * pr + usage.completion_tokens * cr
+
+
+def reset_cost_rates_cache() -> None:
+    global _cost_rates_cache, _cost_rates_version
+    _cost_rates_cache = None
+    _cost_rates_version = None

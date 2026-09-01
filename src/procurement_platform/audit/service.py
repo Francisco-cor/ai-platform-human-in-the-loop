@@ -31,8 +31,50 @@ def create_audit_event(
     policy_decisions: list[str] | None = None,
     model_metadata: dict | None = None,
     trace_id: str | None = None,
+    span_id: str | None = None,
+    duration_ms: int | None = None,
     details: dict | None = None,
 ) -> AuditEvent:
+    # F5-3: auto-correlate trace_id/span_id from OTEL if not provided
+    if not trace_id or not span_id:
+        try:
+            from procurement_platform.observability.tracing import get_current_span_context
+
+            tid, sid = get_current_span_context()
+            if not trace_id and tid:
+                trace_id = tid
+            if not span_id and sid:
+                span_id = sid
+        except Exception:
+            pass
+    # F5-3: ensure model_metadata includes prompt/graph version if missing
+    if model_metadata is None:
+        try:
+            from procurement_platform.config.settings import get_settings
+
+            s = get_settings()
+            model_metadata = {"prompt_version": s.prompt_version, "graph_version": s.graph_version}
+        except Exception:
+            model_metadata = {}
+    else:
+        # enrich if not already
+        try:
+            from procurement_platform.config.settings import get_settings
+
+            s = get_settings()
+            if "prompt_version" not in model_metadata:
+                model_metadata["prompt_version"] = s.prompt_version
+            if "graph_version" not in model_metadata:
+                model_metadata["graph_version"] = s.graph_version
+        except Exception:
+            pass
+    # include duration_ms and span_id in details for drill-down
+    if duration_ms is not None or span_id:
+        details = dict(details or {})
+        if duration_ms is not None:
+            details["duration_ms"] = duration_ms
+        if span_id:
+            details["span_id"] = span_id
     # Fase 7: redactar PII en details antes de persistir
     try:
         if details:

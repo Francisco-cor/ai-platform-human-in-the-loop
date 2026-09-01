@@ -137,6 +137,35 @@ def _reset_gateway_global():
         _db.close()
     except Exception:
         pass
+    # F5-2: reset metrics
+    try:
+        from procurement_platform.observability.metrics import reset_metrics
+
+        reset_metrics()
+    except Exception:
+        pass
+    # F5-4: reset finops
+    try:
+        from procurement_platform.workflows.orchestrator import reset_finops_state
+
+        reset_finops_state()
+    except Exception:
+        pass
+    # F5-1: reset tracing contextvars
+    try:
+        from procurement_platform.observability.logging import (
+            request_id_ctx,
+            span_id_ctx,
+            trace_id_ctx,
+        )
+
+        for ctx in (request_id_ctx, span_id_ctx, trace_id_ctx):
+            try:
+                ctx.set(None)
+            except Exception:
+                pass
+    except Exception:
+        pass
     yield
     try:
         from procurement_platform.infra.locks.manager import reset_lock_manager

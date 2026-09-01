@@ -1,0 +1,119 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Procurement Platform — F5 Observability",
+    "tags": ["procurement", "f5"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Ejecuciones por estado",
+        "type": "timeseries",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "sum by (status) (execution_duration_seconds_count)",
+            "legendFormat": "{{status}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {},
+          "overrides": []
+        }
+      },
+      {
+        "id": 2,
+        "title": "p50 / p95 Latencia http",
+        "type": "timeseries",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.5, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))",
+            "legendFormat": "p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))",
+            "legendFormat": "p95"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Tool errors (rate)",
+        "type": "timeseries",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "sum by (tool) (rate(tool_calls_total{status=\"error\"}[5m]))",
+            "legendFormat": "{{tool}}"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Backlog aprobaciones por tenant",
+        "type": "stat",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "approval_pending_total",
+            "legendFormat": "{{tenant}}"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Coste por tenant (USD)",
+        "type": "timeseries",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "sum by (tenant) (rate(llm_cost_usd_total[5m]))",
+            "legendFormat": "{{tenant}}"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "RAG retrieval latency p95",
+        "type": "timeseries",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, sum by (le) (rate(rag_retrieval_latency_seconds_bucket[5m])))",
+            "legendFormat": "p95"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "RAG precision golden (static 1.0)",
+        "type": "stat",
+        "datasource": "-- Grafana --",
+        "targets": []
+      },
+      {
+        "id": 8,
+        "title": "Budget exceeded rate",
+        "type": "timeseries",
+        "datasource": "Prometheus",
+        "targets": [
+          {
+            "expr": "sum by (tenant,reason) (rate(budget_exceeded_total[5m]))",
+            "legendFormat": "{{tenant}} {{reason}}"
+          }
+        ]
+      }
+    ],
+    "templating": {
+      "list": []
+    },
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timezone": "browser",
+    "version": 1
+  },
+  "overwrite": true
+}

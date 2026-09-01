@@ -23,6 +23,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from procurement_platform.agents.adapter import BudgetExhausted
 from procurement_platform.audit.service import create_audit_event
 from procurement_platform.domain.inventory import (
     InventoryContext,
@@ -236,6 +237,82 @@ def _seed_default_policies(rag: Any) -> None:
     )
     for doc in (doc1, doc2):
         rag.ingest_document(document=doc, actor_id="seed")
+
+
+# F5-4 FinOps — tracking tokens/cost por tenant y ejecución
+_execution_token_usage: dict[str, int] = {}
+_execution_cost_usage: dict[str, float] = {}
+_tenant_cost_usage: dict[str, float] = {}
+_tenant_token_usage: dict[str, int] = {}
+_cost_lock = threading.Lock()
+
+
+def _check_budget_or_raise(execution_id: str, tenant_id: str, additional_tokens: int = 0) -> None:
+    """F5-4: verifica max_tokens_per_execution antes de LLM. Lanza BudgetExhausted."""
+    try:
+        from procurement_platform.config.settings import get_settings
+
+        max_tokens = get_settings().max_tokens_per_execution
+    except Exception:
+        max_tokens = 8000
+    with _cost_lock:
+        used = (
+            _execution_token_usage.get(execution_id, 0) + _tenant_token_usage.get(tenant_id, 0) * 0
+        )  # tenant global not sum
+        # simple: check execution only; tenant budget is same limit per execution (could be higher)
+        if used + additional_tokens > max_tokens:
+            try:
+                from procurement_platform.observability.metrics import get_metrics
+
+                get_metrics().inc_budget_exceeded(tenant_id, "max_tokens_per_execution")
+            except Exception:
+                pass
+            raise BudgetExhausted(
+                f"budget_exceeded: execution {execution_id} tokens {used}+{additional_tokens} > {max_tokens}"
+            )
+
+
+def _record_llm_usage(
+    execution_id: str, tenant_id: str, provider: str, model: str, usage: Any
+) -> float:
+    """F5-4: registra tokens/cost y actualiza métricas. Retorna cost."""
+    try:
+        from procurement_platform.agents.adapter import estimate_cost
+        from procurement_platform.observability.metrics import get_metrics
+
+        cost = estimate_cost(provider, model, usage)
+        with _cost_lock:
+            _execution_token_usage[execution_id] = (
+                _execution_token_usage.get(execution_id, 0) + usage.total_tokens
+            )
+            _execution_cost_usage[execution_id] = (
+                _execution_cost_usage.get(execution_id, 0.0) + cost
+            )
+            _tenant_cost_usage[tenant_id] = _tenant_cost_usage.get(tenant_id, 0.0) + cost
+            _tenant_token_usage[tenant_id] = (
+                _tenant_token_usage.get(tenant_id, 0) + usage.total_tokens
+            )
+        m = get_metrics()
+        m.inc_llm_tokens(provider, model, usage.prompt_tokens, usage.completion_tokens)
+        m.inc_llm_cost(provider, model, tenant_id, cost)
+        m.inc_llm_request(provider, model, "success")
+        m.observe_cost(tenant_id, cost)
+        return cost
+    except Exception:
+        return 0.0
+
+
+def _get_execution_cost(execution_id: str) -> float:
+    with _cost_lock:
+        return _execution_cost_usage.get(execution_id, 0.0)
+
+
+def reset_finops_state() -> None:
+    with _cost_lock:
+        _execution_token_usage.clear()
+        _execution_cost_usage.clear()
+        _tenant_cost_usage.clear()
+        _tenant_token_usage.clear()
 
 
 # Locks por execution para Fase 5 — idempotencia y prevención de duplicación
@@ -454,6 +531,21 @@ class WorkflowOrchestrator:
             )
         )
         db.commit()
+        # F5-2: metrics execution duration + cost
+        try:
+            from procurement_platform.observability.metrics import get_metrics
+
+            duration_s = (
+                (row.updated_at - row.created_at).total_seconds()
+                if row.created_at and row.updated_at
+                else 0
+            )
+            get_metrics().execution_duration_seconds.observe(duration_s, {"status": target.value})
+            if target == ExecutionState.COMPLETED:
+                cost = _get_execution_cost(execution_id)
+                get_metrics().observe_cost(row.tenant_id, cost)
+        except Exception:
+            pass
         db.refresh(row)
         return _serialize_execution(row)
 
@@ -790,12 +882,29 @@ class WorkflowOrchestrator:
         )
 
     def _call_llm_for_proposal(
-        self, normalized: NormalizedRequest, shortages: list, catalog: SupplierCatalog
+        self,
+        normalized: NormalizedRequest,
+        shortages: list,
+        catalog: SupplierCatalog,
+        execution_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict | None:
         """Fase 4: llama a LLM (Gemini → DeepSeek → fake) para proponer borrador.
 
-        Retorna dict con propuesta del LLM o None si no disponible/falla. No lanza excepción.
+        F5-4: verifica budget antes de LLM y registra tokens/cost.
+        Retorna dict con propuesta del LLM o None si no disponible/falla. No lanza excepción salvo BudgetExhausted.
         """
+        # F5-4: budget check before LLM
+        try:
+            _check_budget_or_raise(
+                execution_id or normalized.request_id,
+                tenant_id or normalized.tenant_id,
+                additional_tokens=800,
+            )
+        except BudgetExhausted:
+            raise
+        except Exception:
+            pass
         try:
             from procurement_platform.agents.adapter import LLMRequest
             from procurement_platform.agents.factory import run_llm_sync
@@ -882,9 +991,20 @@ class WorkflowOrchestrator:
                 prompt_version=settings.prompt_version,
                 graph_version=settings.graph_version,
                 tenant_id=normalized.tenant_id,
-                execution_id="tmp",
+                execution_id=execution_id or normalized.request_id,
             )
             resp = run_llm_sync(req)
+            # F5-4: record tokens/cost
+            try:
+                _record_llm_usage(
+                    execution_id or normalized.request_id,
+                    normalized.tenant_id,
+                    resp.provider,
+                    resp.model,
+                    resp.usage,
+                )
+            except Exception:
+                pass
             if (
                 isinstance(resp.content, dict)
                 and "supplier_id" in resp.content
@@ -899,6 +1019,8 @@ class WorkflowOrchestrator:
                     "was_fallback": resp.was_fallback,
                 }
             return None
+        except BudgetExhausted:
+            raise
         except Exception as e:
             import structlog
 
@@ -997,8 +1119,18 @@ class WorkflowOrchestrator:
             missing_supplier.append("fallback_no_supplier_lines_created")
 
         # Fase 4: intentar LLM para borrador, validar y recalcualr (el LLM propone, el sistema decide)
+        # F5-4: budget enforcement antes de LLM
         llm_info = None
-        llm_proposal = self._call_llm_for_proposal(normalized, shortages, catalog)
+        try:
+            llm_proposal = self._call_llm_for_proposal(
+                normalized,
+                shortages,
+                catalog,
+                execution_id=row.execution_id,
+                tenant_id=normalized.tenant_id,
+            )
+        except BudgetExhausted as be:
+            raise ValueError(f"budget_exceeded_llm: {be}") from be
         if llm_proposal:
             llm_content = llm_proposal["content"]
             # Validar que el LLM propone supplier y lines con schema correcto; si no, se ignora y se usa determinista

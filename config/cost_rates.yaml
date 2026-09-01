@@ -1,0 +1,29 @@
+# F5-4 FinOps — tarifas versionadas USD por 1K tokens
+# Fuentes: Gemini pricing 2025, DeepSeek pricing 2025 (aprox, actualizable)
+# version: v1
+
+version: "v1"
+effective_from: "2025-01-01"
+rates:
+  gemini:
+    gemini-2.0-flash:
+      prompt_per_1k: 0.075
+      completion_per_1k: 0.30
+    gemini-1.5-pro:
+      prompt_per_1k: 1.25
+      completion_per_1k: 5.00
+  deepseek:
+    deepseek-chat:
+      prompt_per_1k: 0.14
+      completion_per_1k: 0.28
+    deepseek-reasoner:
+      prompt_per_1k: 0.55
+      completion_per_1k: 2.19
+  fake:
+    fake:
+      prompt_per_1k: 0.0
+      completion_per_1k: 0.0
+  # fallback
+  default:
+    prompt_per_1k: 0.10
+    completion_per_1k: 0.30

@@ -233,6 +233,16 @@ class ToolGateway:
         timeout_ms: int = 5000,
     ) -> dict[str, Any]:
         t0 = time.time()
+
+        # F5-2: metrics helper
+        def _record_tool(success: bool, duration_s: float):
+            try:
+                from procurement_platform.observability.metrics import get_metrics
+
+                get_metrics().observe_tool(tool_name, duration_s, "success" if success else "error")
+            except Exception:
+                pass
+
         # 1. valida input — redactar PII en payload antes de validar (Fase 7)
         try:
             from procurement_platform.security.pii import redact_dict_values
@@ -265,6 +275,10 @@ class ToolGateway:
         except Exception as e:
             # si es RateLimitExceeded, traducir a ToolGatewayError
             if "rate_limited" in str(e):
+                try:
+                    _record_tool(False, time.time() - t0)
+                except Exception:
+                    pass
                 raise ToolGatewayError(
                     "rate_limited", str(e), {"tool": tool_name, "tenant_id": tenant_id}
                 ) from e
@@ -272,7 +286,18 @@ class ToolGateway:
         # 3. allowlist
         self._check_allowlist(tool_name, state)
         # 4. budgets
-        self.budget.check_and_increment(tool_name)
+        try:
+            self.budget.check_and_increment(tool_name)
+        except ToolGatewayError as be:
+            if be.code == "budget_exceeded":
+                try:
+                    from procurement_platform.observability.metrics import get_metrics
+
+                    get_metrics().inc_budget_exceeded(tenant_id, tool_name)
+                except Exception:
+                    pass
+            _record_tool(False, time.time() - t0)
+            raise
         # 5. aprobación
         self._check_approval(tool_name, has_approval)
         # 6. idempotencia — Fase 5-2: memory + redis (dual) + LockManager
@@ -302,6 +327,11 @@ class ToolGateway:
                 raise ToolGatewayError("conflict", "gateway lock timeout", {"tool": tool_name})
         try:
             if key in self._idempotency:
+                # F5-2: idempotent hit still counts as success but no duration
+                try:
+                    _record_tool(True, time.time() - t0)
+                except Exception:
+                    pass
                 return self._idempotency[key]
             # 7. ejecución simulada (Fase 5: con timeout y verificación)
             result = self._execute_simulated(tool_name, payload, execution_id)
@@ -324,7 +354,20 @@ class ToolGateway:
             # 10. redactar secretos (no aplica en simulación) + store idempotente (memory + redis)
             self._idempotency[key] = result
             _redis_idempotency_set(key, result, ttl=get_settings().default_idempotency_ttl_seconds)
+            _record_tool(True, time.time() - t0)
             return result
+        except ToolGatewayError:
+            try:
+                _record_tool(False, time.time() - t0)
+            except Exception:
+                pass
+            raise
+        except Exception:
+            try:
+                _record_tool(False, time.time() - t0)
+            except Exception:
+                pass
+            raise
         finally:
             if use_mgr:
                 try:

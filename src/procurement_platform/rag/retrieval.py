@@ -188,6 +188,9 @@ class RetrievalService:
 
     def retrieve(self, query: RetrievalQuery, now: datetime | None = None) -> list[RetrievalResult]:
         """Hybrid retrieval: vector + BM25 + MMR + feedback boosting."""
+        import time
+
+        t0 = time.time()
         now = now or datetime.now(UTC)
         # 1. filtrar antes de rankear (§10: tenant, vigencia, jurisdicción, permisos, etc.)
         candidates = [c for c in self._chunks if self._filter(c, query, now)]
@@ -280,6 +283,13 @@ class RetrievalService:
             # store rerank_score placeholder (filled by reranker if enabled)
             citation["rerank_score"] = None
             results.append(RetrievalResult(chunk=chunk, score=hybrid_score, citation=citation))
+        # F5-2: rag latency metrics
+        try:
+            from procurement_platform.observability.metrics import get_metrics
+
+            get_metrics().observe_rag(query.tenant_id, time.time() - t0)
+        except Exception:
+            pass
         return results
 
     def retrieve_with_validation(

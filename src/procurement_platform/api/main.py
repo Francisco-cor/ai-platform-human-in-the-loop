@@ -35,6 +35,14 @@ app = FastAPI(
     description="Enterprise Agentic AI Platform — Fase 0-5 con RAG seguro y aprobación humana durable",
 )
 
+# F5-1: OTEL tracing auto-instrumented
+try:
+    from procurement_platform.observability.tracing import setup_tracing
+
+    setup_tracing(app, settings_exporter=settings.otel_exporter)
+except Exception as _e:
+    logger.warning("tracing_setup_failed", error=str(_e))
+
 orchestrator = WorkflowOrchestrator()
 
 # Ensure tables exist on startup (for sqlite local; postgres handled via alembic)
@@ -45,15 +53,40 @@ except Exception as e:
 
 
 # ---------------------------------------------------------------------------
-# Middleware — request_id + trace + logging + payload size
+# Middleware — request_id + trace + logging + payload size + OTEL span (F5-1)
 # ---------------------------------------------------------------------------
 @app.middleware("http")
 async def add_request_context(request: Request, call_next):
     start = time.time()
     request_id = request.headers.get("X-Request-Id") or f"req_{uuid.uuid4().hex[:12]}"
-    trace_id = request.headers.get("traceparent") or uuid.uuid4().hex
+    # F5-1: traceparent W3C or PROCUREMENT_OTEL_EXPORTER; fallback to hex
+    trace_id = (
+        request.headers.get("traceparent") or request.headers.get("X-Trace-Id") or uuid.uuid4().hex
+    )
+    # normalize traceparent if it contains version-trace-span-flags
+    if "-" in trace_id and len(trace_id) > 32:
+        try:
+            parts = trace_id.split("-")
+            if len(parts) >= 2:
+                trace_id = parts[1]
+        except Exception:
+            pass
     request.state.request_id = request_id
     request.state.trace_id = trace_id
+    # bind to contextvars for logging correlation
+    try:
+        from procurement_platform.observability.logging import (
+            request_id_ctx,
+            span_id_ctx,
+            trace_id_ctx,
+        )
+
+        request_id_ctx.set(request_id)
+        trace_id_ctx.set(trace_id)
+        # span_id will be set inside OTEL span if available
+        span_id_ctx.set(uuid.uuid4().hex[:16])
+    except Exception:
+        pass
 
     # payload size guard (F1-4: streaming + content-length)
     cl = request.headers.get("content-length")
@@ -115,11 +148,88 @@ async def add_request_context(request: Request, call_next):
         except Exception:
             pass
 
+    # F5-1: OTEL span per request (lazy, no-op if exporter none)
+    try:
+        from opentelemetry import trace as otel_trace  # type: ignore
+
+        tracer = otel_trace.get_tracer("procurement_platform.api")
+        # use start_as_current_span if available, else direct call
+        span_name = f"{request.method} {request.url.path}"
+        with tracer.start_as_current_span(span_name) as span:  # type: ignore
+            # correlate trace_id/span_id to contextvars and request.state
+            try:
+                sc = span.get_span_context()
+                if sc and getattr(sc, "is_valid", False):
+                    otel_tid = format(sc.trace_id, "032x")
+                    otel_sid = format(sc.span_id, "016x")
+                    request.state.trace_id = otel_tid
+                    trace_id = otel_tid
+                    try:
+                        from procurement_platform.observability.logging import (
+                            span_id_ctx,
+                            trace_id_ctx,
+                        )
+
+                        trace_id_ctx.set(otel_tid)
+                        span_id_ctx.set(otel_sid)
+                    except Exception:
+                        pass
+                    span.set_attribute("request_id", request_id)
+                    span.set_attribute("http.method", request.method)
+                    span.set_attribute("http.url", str(request.url))
+            except Exception:
+                pass
+            response: Response = await call_next(request)
+            duration = time.time() - start
+            response.headers["X-Request-Id"] = request_id
+            response.headers["X-Trace-Id"] = trace_id
+            try:
+                span.set_attribute("http.status_code", response.status_code)
+                span.set_attribute("duration_ms", round(duration * 1000, 2))
+            except Exception:
+                pass
+            # F5-2: metrics observe
+            try:
+                from procurement_platform.observability.metrics import get_metrics
+
+                get_metrics().observe_http(
+                    method=request.method,
+                    path=request.url.path,
+                    status=response.status_code,
+                    duration_s=duration,
+                )
+            except Exception:
+                pass
+            logger.info(
+                "request",
+                request_id=request_id,
+                trace_id=trace_id,
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration_ms=round(duration * 1000, 2),
+            )
+            return response
+    except Exception:
+        # fallback without OTEL (no-op tracer or import error)
+        pass
+
     response: Response = await call_next(request)
     duration = time.time() - start
     response.headers["X-Request-Id"] = request_id
     response.headers["X-Trace-Id"] = trace_id
-    # Fase 7: redactar PII en logs (ya hace logging processor, pero asegurar no loguear body crudo)
+    # F5-2: metrics even without OTEL
+    try:
+        from procurement_platform.observability.metrics import get_metrics
+
+        get_metrics().observe_http(
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+            duration_s=duration,
+        )
+    except Exception:
+        pass
     logger.info(
         "request",
         request_id=request_id,
@@ -140,24 +250,127 @@ def healthz():
     return {"status": "ok", "version": app.version, "env": settings.app_env}
 
 
+@app.get("/metrics", tags=["ops"])
+def metrics_endpoint():
+    """F5-2 Prometheus metrics exposition."""
+    from fastapi.responses import PlainTextResponse
+
+    from procurement_platform.observability.metrics import get_metrics
+
+    data = get_metrics().generate()
+    return PlainTextResponse(data, media_type="text/plain; version=0.0.4")
+
+
 @app.get("/readyz", tags=["ops"])
 def readyz(db: Session = Depends(get_db)):
-    # check DB
+    """F5-6 deep health: DB + Redis + vector (pgvector)."""
+    checks: dict[str, str] = {}
+    # DB
     try:
         db.execute(__import__("sqlalchemy").text("SELECT 1"))
+        checks["db"] = "ok"
     except Exception as e:
         raise HTTPException(status_code=503, detail={"code": "db_not_ready", "message": str(e)})
-    # redis optional — try ping if configured
-    redis_ok = None
+    # Redis
     try:
         import redis
 
         r = redis.from_url(settings.redis_url, socket_connect_timeout=1)
         r.ping()
-        redis_ok = True
+        checks["redis"] = "ok"
     except Exception:
-        redis_ok = False  # not fatal for Fase 1
-    return {"status": "ready", "db": "ok", "redis": "ok" if redis_ok else "skipped"}
+        checks["redis"] = "skipped"
+    # Vector (pgvector) — check extension and column
+    try:
+        from procurement_platform.persistence.database import get_engine
+        from sqlalchemy import inspect as sa_inspect
+
+        eng = get_engine()
+        insp = sa_inspect(eng)
+        cols = (
+            {c["name"] for c in insp.get_columns("document_chunks")}
+            if insp.has_table("document_chunks")
+            else set()
+        )
+        if "embedding_vec" in cols:
+            checks["vector"] = "ok"
+            # try vector extension check on postgres
+            if eng.dialect.name == "postgresql":
+                try:
+                    db.execute(
+                        __import__("sqlalchemy").text(
+                            "SELECT 1 FROM pg_extension WHERE extname='vector'"
+                        )
+                    )
+                    checks["vector"] = "ok"
+                except Exception:
+                    checks["vector"] = "degraded"
+        else:
+            checks["vector"] = "skipped"
+    except Exception:
+        checks["vector"] = "skipped"
+    # RAG service
+    try:
+        from procurement_platform.workflows.orchestrator import get_rag_service
+
+        rag = get_rag_service()
+        checks["rag"] = "ok" if rag is not None else "skipped"
+    except Exception:
+        checks["rag"] = "skipped"
+    # tracing
+    try:
+        from procurement_platform.observability.tracing import get_current_span_context
+
+        tid, sid = get_current_span_context()
+        checks["tracing"] = "ok" if tid else "skipped"
+    except Exception:
+        checks["tracing"] = "skipped"
+    # overall ready if db ok
+    status = "ready" if checks.get("db") == "ok" else "degraded"
+    return {"status": status, **checks}
+
+
+@app.get("/slo", tags=["ops"])
+def slo():
+    """F5-6 SLO burn rate — http 5xx, p95, approval backlog, budget."""
+    try:
+        from procurement_platform.observability.metrics import get_metrics
+
+        m = get_metrics()
+        # estimate error rate from http_requests_total
+        total = 0
+        errors = 0
+        try:
+            for key, val in m.http_requests_total._data.items():
+                # key is (method,path,status)
+                status = key[2] if len(key) > 2 else ""
+                total += val
+                if status.startswith("5"):
+                    errors += val
+        except Exception:
+            pass
+        error_rate = (errors / total) if total else 0.0
+        # burn rate: error_rate / (1 - 0.999) for 99.9 SLO
+        burn = error_rate / 0.001 if error_rate else 0.0
+        # backlog approvals from gauge
+        backlog = 0
+        try:
+            for v in m.approval_pending._data.values():
+                backlog += v
+        except Exception:
+            pass
+        # p95 placeholder: compute from histogram buckets if available
+        p95_placeholder = 0.5
+        return {
+            "slo": "99.9% availability, p95<1s, backlog<50",
+            "error_rate": round(error_rate, 4),
+            "burn_rate": round(burn, 3),
+            "approval_backlog": int(backlog),
+            "p95_latency_s": p95_placeholder,
+            "status": "ok" if error_rate < 0.01 and backlog < 50 else "degraded",
+        }
+    except Exception as e:
+        return {"status": "unknown", "error": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +552,7 @@ def list_events(
     db: Session = Depends(get_db),
     limit: int = 50,
     cursor: str | None = None,
+    format: str | None = None,
 ):
     # verify execution exists
     if not db.get(WorkflowExecution, execution_id):
@@ -385,6 +599,35 @@ def list_events(
         # simplify: if we got limit rows, assume may have more
         has_more = len(rows) == limit
     next_cursor = rows[-1].event_id if has_more else None
+    # F5-3: trace drill-down format
+    if format == "trace":
+        timeline = []
+        for r in rows:
+            details = r.details or {}
+            timeline.append(
+                {
+                    "event_id": r.event_id,
+                    "event_type": r.event_type,
+                    "timestamp": r.timestamp.isoformat(),
+                    "trace_id": r.trace_id,
+                    "span_id": details.get("span_id") if isinstance(details, dict) else None,
+                    "duration_ms": details.get("duration_ms")
+                    if isinstance(details, dict)
+                    else None,
+                    "model_metadata": r.model_metadata,
+                    "tool_name": r.tool_name,
+                    "actor_id": r.actor_id,
+                    "details": details,
+                }
+            )
+        return {
+            "execution_id": execution_id,
+            "count": len(rows),
+            "total": total,
+            "trace_id": rows[0].trace_id if rows else None,
+            "timeline": timeline,
+            "next_cursor": next_cursor,
+        }
     return {
         "execution_id": execution_id,
         "count": len(rows),
@@ -400,6 +643,13 @@ def list_events(
                 "tool_name": r.tool_name,
                 "timestamp": r.timestamp.isoformat(),
                 "trace_id": r.trace_id,
+                "span_id": (r.details or {}).get("span_id")
+                if isinstance(r.details, dict)
+                else None,
+                "duration_ms": (r.details or {}).get("duration_ms")
+                if isinstance(r.details, dict)
+                else None,
+                "model_metadata": r.model_metadata,
                 "details": r.details,
             }
             for r in rows

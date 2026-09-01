@@ -14,6 +14,7 @@ import structlog
 
 request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
 trace_id_ctx: ContextVar[str | None] = ContextVar("trace_id", default=None)
+span_id_ctx: ContextVar[str | None] = ContextVar("span_id", default=None)
 
 
 def _redact_pii_processor(logger, method_name, event_dict):  # type: ignore
@@ -41,11 +42,43 @@ def _redact_pii_processor(logger, method_name, event_dict):  # type: ignore
     return event_dict
 
 
+def _otel_correlation_processor(logger, method_name, event_dict):  # type: ignore
+    """F5-1: añade trace_id/span_id desde OTel o contextvars."""
+    try:
+        from procurement_platform.observability.tracing import get_current_span_context
+
+        tid, sid = get_current_span_context()
+        if tid and "trace_id" not in event_dict:
+            event_dict["trace_id"] = tid
+        if sid and "span_id" not in event_dict:
+            event_dict["span_id"] = sid
+    except Exception:
+        pass
+    # fallback to contextvars if still missing
+    try:
+        if "trace_id" not in event_dict:
+            tid = trace_id_ctx.get()
+            if tid:
+                event_dict["trace_id"] = tid
+        if "span_id" not in event_dict:
+            sid = span_id_ctx.get()
+            if sid:
+                event_dict["span_id"] = sid
+        if "request_id" not in event_dict:
+            rid = request_id_ctx.get()
+            if rid:
+                event_dict["request_id"] = rid
+    except Exception:
+        pass
+    return event_dict
+
+
 def configure_logging(level: str = "INFO") -> None:
     logging.basicConfig(stream=sys.stdout, level=level, format="%(message)s")
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
+            _otel_correlation_processor,
             _redact_pii_processor,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
