@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     max_payload_bytes: int = Field(default=256 * 1024, alias="PROCUREMENT_MAX_PAYLOAD_BYTES")
     default_idempotency_ttl_seconds: int = Field(default=86400, alias="PROCUREMENT_IDEMPOTENCY_TTL")
 
+    # Workers (F2-2)
+    async_enabled: bool = Field(default=False, alias="PROCUREMENT_ASYNC_ENABLED")
+    worker_concurrency: int = Field(default=4, alias="PROCUREMENT_WORKER_CONCURRENCY")
+
     @property
     def is_local(self) -> bool:
         return self.app_env == "local"

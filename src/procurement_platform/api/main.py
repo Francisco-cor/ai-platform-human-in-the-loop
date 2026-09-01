@@ -237,8 +237,31 @@ def create_execution(
     exec_obj = orchestrator.create_execution(
         db, normalized=normalized, trace_id=trace_id, actor_id=normalized.requester_id
     )
-    # Avanzar sintéticamente hasta AWAITING_APPROVAL (Fase 1)
-    exec_obj = orchestrator.advance_synthetic(db, exec_obj.execution_id, trace_id=trace_id)
+    # F2-2: async path enqueues worker, otherwise advance sync (Fase 1)
+    try:
+        from procurement_platform.config.settings import get_settings
+
+        if get_settings().async_enabled:
+            from procurement_platform.workers.tasks import enqueue_workflow
+
+            enqueued = enqueue_workflow(exec_obj.execution_id, trace_id=trace_id)
+            if not enqueued:
+                # fallback sync if redis unavailable
+                exec_obj = orchestrator.advance_synthetic(
+                    db, exec_obj.execution_id, trace_id=trace_id
+                )
+            else:
+                # enqueued: refresh to show RECEIVED/NORMALIZED; worker will advance async
+                # for API contract, return current state (RECEIVED) and let client poll
+                pass
+        else:
+            exec_obj = orchestrator.advance_synthetic(db, exec_obj.execution_id, trace_id=trace_id)
+    except Exception:
+        # ensure sync fallback never blocks creation
+        try:
+            exec_obj = orchestrator.advance_synthetic(db, exec_obj.execution_id, trace_id=trace_id)
+        except Exception:
+            pass
 
     resp_body = {
         "execution_id": exec_obj.execution_id,
