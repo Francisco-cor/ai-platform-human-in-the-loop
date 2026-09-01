@@ -100,6 +100,47 @@ def _get_lock_manager_gateway():
         return None
 
 
+def _get_redis_for_idempotency():
+    try:
+        from procurement_platform.config.settings import get_settings
+
+        settings = get_settings()
+        if settings.app_env in ("ci", "test"):
+            return None
+        import redis  # type: ignore
+
+        return redis.from_url(settings.redis_url, socket_connect_timeout=0.2, socket_timeout=0.2)
+    except Exception:
+        return None
+
+
+def _redis_idempotency_get(key: str):
+    try:
+        r = _get_redis_for_idempotency()
+        if r is None:
+            return None
+        import json
+
+        val = r.get(f"idem:{key}")
+        if val:
+            return json.loads(val)
+    except Exception:
+        pass
+    return None
+
+
+def _redis_idempotency_set(key: str, value: Any, ttl: int = 86400):
+    try:
+        r = _get_redis_for_idempotency()
+        if r is None:
+            return
+        import json
+
+        r.setex(f"idem:{key}", ttl, json.dumps(value))
+    except Exception:
+        pass
+
+
 class ToolGateway:
     """Gateway síncrono — Fase 4-5 con store global idempotente."""
 
@@ -234,11 +275,16 @@ class ToolGateway:
         self.budget.check_and_increment(tool_name)
         # 5. aprobación
         self._check_approval(tool_name, has_approval)
-        # 6. idempotencia — Fase 5: lock por idempotency key + store global (via LockManager)
+        # 6. idempotencia — Fase 5-2: memory + redis (dual) + LockManager
         key = idempotency_key or self._idempotency_key(execution_id, tool_name, payload)
-        # fast path sin lock
+        # fast path memory
         if key in self._idempotency:
             return self._idempotency[key]
+        # try redis
+        r_cached = _redis_idempotency_get(key)
+        if r_cached is not None:
+            self._idempotency[key] = r_cached
+            return r_cached
         mgr = _get_lock_manager_gateway()
         lock = None
         use_mgr = mgr is not None
@@ -275,8 +321,9 @@ class ToolGateway:
                     "actor_id": actor_id,
                 }
             )
-            # 10. redactar secretos (no aplica en simulación) + store idempotente
+            # 10. redactar secretos (no aplica en simulación) + store idempotente (memory + redis)
             self._idempotency[key] = result
+            _redis_idempotency_set(key, result, ttl=get_settings().default_idempotency_ttl_seconds)
             return result
         finally:
             if use_mgr:
