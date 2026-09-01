@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     async_enabled: bool = Field(default=False, alias="PROCUREMENT_ASYNC_ENABLED")
     worker_concurrency: int = Field(default=4, alias="PROCUREMENT_WORKER_CONCURRENCY")
 
+    # Embeddings (F4-1)
+    embedder: Literal["fake", "gemini"] = Field(default="fake", alias="PROCUREMENT_EMBEDDER")
+    embedder_model: str = Field(default="fake-384", alias="PROCUREMENT_EMBEDDER_MODEL")
+    gemini_embed_model: str = Field(default="models/text-embedding-004", alias="GEMINI_EMBED_MODEL")
+    reranker_enabled: bool = Field(default=False, alias="PROCUREMENT_RERANKER_ENABLED")
+    gcs_ingest_enabled: bool = Field(default=False, alias="PROCUREMENT_GCS_INGEST_ENABLED")
+
     # Auth (F3-1)
     jwt_secret: str | None = Field(default=None, alias="PROCUREMENT_JWT_SECRET")
 
