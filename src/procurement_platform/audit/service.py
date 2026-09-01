@@ -74,7 +74,9 @@ def create_audit_event(
         details=event.details,
     )
     db.add(row)
-    # F2-5: transactional outbox — same flush, caller commits together
+    # F2-5: transactional outbox — same flush, caller commits together (best-effort if table missing)
+    outbox_added = False
+    out = None
     try:
         from procurement_platform.persistence.models import OutboxEvent
 
@@ -89,8 +91,24 @@ def create_audit_event(
             last_error=None,
         )
         db.add(out)
+        outbox_added = True
     except Exception:
-        pass
-    # flush but not commit — caller decides
-    db.flush()
+        outbox_added = False
+    # flush but not commit — caller decides; handle missing table gracefully
+    try:
+        db.flush()
+    except Exception as e:
+        # if outbox table missing, remove pending out and retry audit only
+        if outbox_added and out is not None:
+            try:
+                db.expunge(out)  # type: ignore[arg-type]
+            except Exception:
+                pass
+            # try flush again with only audit row
+            try:
+                db.flush()
+            except Exception:
+                raise
+        else:
+            raise
     return event
