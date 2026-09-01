@@ -67,6 +67,15 @@ eval-gate-v1:
 eval-report:
 	python -m procurement_platform.evals.runner --mode direct --suite all --output evals/reports/latest.json
 
+eval-rag:
+	python -m procurement_platform.evals.rag_eval
+
+eval-rag-rerank:
+	python -m procurement_platform.evals.rag_eval --reranker
+
+eval-rag-json:
+	python -m procurement_platform.evals.rag_eval --json-out evals/reports/rag_eval.json
+
 eval-security:
 	python -m pytest tests/security -v
 	python -m pytest tests/integration/test_security_adversarial.py -v

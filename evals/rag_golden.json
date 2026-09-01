@@ -1,0 +1,502 @@
+[
+  {
+    "query_id": "q001",
+    "query": "Política: límite delegado 5000 USD para warehouse_north presupuesto normativa vigente 2025",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_budget_v1"],
+    "expected_policy_type": "budget_limit",
+    "top_k": 5
+  },
+  {
+    "query_id": "q002",
+    "query": "proveedores permitidos supplier_demo supplier_alt allowlist tenant_demo",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_supplier_allowlist_v1"],
+    "expected_policy_type": "supplier_allowlist",
+    "top_k": 5
+  },
+  {
+    "query_id": "q003",
+    "query": "cobertura inventario horizonte 21 días lead time 7 warehouse_north MAT-001",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_inventory_coverage_v1"],
+    "expected_policy_type": "inventory_coverage",
+    "top_k": 5
+  },
+  {
+    "query_id": "q004",
+    "query": "vigencia política válida desde 2025-01-01 hasta 2026-12-31 jurisdicción global",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_validity_v1"],
+    "expected_policy_type": "validity",
+    "top_k": 5
+  },
+  {
+    "query_id": "q005",
+    "query": "riesgo alto requiere doble aprobación approval risk high 6000 USD",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_approval_risk_v1"],
+    "expected_policy_type": "approval_risk",
+    "top_k": 5
+  },
+  {
+    "query_id": "q006",
+    "query": "límite presupuestario delegado 5000 para tenant_demo warehouse_north",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_budget_v1"],
+    "expected_policy_type": "budget_limit",
+    "top_k": 5
+  },
+  {
+    "query_id": "q007",
+    "query": "supplier_demo activo permitido para tenant_demo currency USD",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_supplier_allowlist_v1"],
+    "expected_policy_type": "supplier_allowlist",
+    "top_k": 5
+  },
+  {
+    "query_id": "q008",
+    "query": "faltante shortage 138 unidades MAT-001 demanda 8 por día",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_inventory_coverage_v1"],
+    "expected_policy_type": "inventory_coverage",
+    "top_k": 5
+  },
+  {
+    "query_id": "q009",
+    "query": "documento aprobado status approved clasificación internal",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_validity_v1"],
+    "expected_policy_type": "validity",
+    "top_k": 5
+  },
+  {
+    "query_id": "q010",
+    "query": "scope_hash proposal total 1380 requiere aprobación humana",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_approval_risk_v1"],
+    "expected_policy_type": "approval_risk",
+    "top_k": 5
+  },
+  {
+    "query_id": "q011",
+    "query": "presupuesto 5000 delegado warehouse_north normativa § artículo 1",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_budget_v1"],
+    "expected_policy_type": "budget_limit",
+    "top_k": 5
+  },
+  {
+    "query_id": "q012",
+    "query": "allowlist proveedores supplier_demo lead time 7 días",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_supplier_allowlist_v1"],
+    "expected_policy_type": "supplier_allowlist",
+    "top_k": 5
+  },
+  {
+    "query_id": "q013",
+    "query": "inventario disponible on_hand 20 reserved 5 in_transit 10",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_inventory_coverage_v1"],
+    "expected_policy_type": "inventory_coverage",
+    "top_k": 5
+  },
+  {
+    "query_id": "q014",
+    "query": "global jurisdiction política vigente tenant_demo",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_validity_v1"],
+    "expected_policy_type": "validity",
+    "top_k": 5
+  },
+  {
+    "query_id": "q015",
+    "query": "high risk doble aprobación requires 2 approvers",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_approval_risk_v1"],
+    "expected_policy_type": "approval_risk",
+    "top_k": 5
+  },
+  {
+    "query_id": "q016",
+    "query": "límite 5000 USD presupuesto delegado tenant_demo 2025",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_budget_v1"],
+    "expected_policy_type": "budget_limit",
+    "top_k": 5
+  },
+  {
+    "query_id": "q017",
+    "query": "proveedor supplier_alt permitido para warehouse_north",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_supplier_allowlist_v1"],
+    "expected_policy_type": "supplier_allowlist",
+    "top_k": 5
+  },
+  {
+    "query_id": "q018",
+    "query": "demanda diaria 8 unidades lead 7 horizonte 21",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_inventory_coverage_v1"],
+    "expected_policy_type": "inventory_coverage",
+    "top_k": 5
+  },
+  {
+    "query_id": "q019",
+    "query": "internal clasificación public internal restricted confidential",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_validity_v1"],
+    "expected_policy_type": "validity",
+    "top_k": 5
+  },
+  {
+    "query_id": "q020",
+    "query": "approval requested scope_hash sha256 proposal_id",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_approval_risk_v1"],
+    "expected_policy_type": "approval_risk",
+    "top_k": 5
+  },
+  {
+    "query_id": "q021",
+    "query": "Política: El límite delegado para tenant_demo en warehouse_north es 5000 USD. Toda orden por encima requiere aprobación humana.",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_budget_v1"],
+    "expected_policy_type": "budget_limit",
+    "top_k": 5
+  },
+  {
+    "query_id": "q022",
+    "query": "Política: Proveedores permitidos para tenant_demo son supplier_demo y supplier_alt. Proveedor activo requerido.",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_supplier_allowlist_v1"],
+    "expected_policy_type": "supplier_allowlist",
+    "top_k": 5
+  },
+  {
+    "query_id": "q023",
+    "query": "Política: Cobertura inventario 21 días incluir demanda y órdenes abiertas.",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_inventory_coverage_v1"],
+    "expected_policy_type": "inventory_coverage",
+    "top_k": 5
+  },
+  {
+    "query_id": "q024",
+    "query": "Política: vigencia 2025-01-01 válida normativa global aprobada",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_validity_v1"],
+    "expected_policy_type": "validity",
+    "top_k": 5
+  },
+  {
+    "query_id": "q025",
+    "query": "Política: riesgo high requiere 2 aprobaciones parcial y expiración 24h",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_approval_risk_v1"],
+    "expected_policy_type": "approval_risk",
+    "top_k": 5
+  },
+  {
+    "query_id": "q026",
+    "query": "presupuesto delegado 5000 tenant_demo warehouse_north límite",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_budget_v1"],
+    "expected_policy_type": "budget_limit",
+    "top_k": 5
+  },
+  {
+    "query_id": "q027",
+    "query": "supplier_demo activo 10000 max order 1 min order",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_supplier_allowlist_v1"],
+    "expected_policy_type": "supplier_allowlist",
+    "top_k": 5
+  },
+  {
+    "query_id": "q028",
+    "query": "cálculo faltante shortage 138 total 1380 determinista",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_inventory_coverage_v1"],
+    "expected_policy_type": "inventory_coverage",
+    "top_k": 5
+  },
+  {
+    "query_id": "q029",
+    "query": "jurisdicción global location warehouse_north policy",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_validity_v1"],
+    "expected_policy_type": "validity",
+    "top_k": 5
+  },
+  {
+    "query_id": "q030",
+    "query": "doble aprobación high risk 6000 total 2 approvers",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_approval_risk_v1"],
+    "expected_policy_type": "approval_risk",
+    "top_k": 5
+  },
+  {
+    "query_id": "q031",
+    "query": "límite delegado 5000 USD tenant_demo",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_budget_v1"],
+    "expected_policy_type": "budget_limit",
+    "top_k": 5
+  },
+  {
+    "query_id": "q032",
+    "query": "proveedores permitidos supplier_demo",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_supplier_allowlist_v1"],
+    "expected_policy_type": "supplier_allowlist",
+    "top_k": 5
+  },
+  {
+    "query_id": "q033",
+    "query": "inventario warehouse_north MAT-001",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_inventory_coverage_v1"],
+    "expected_policy_type": "inventory_coverage",
+    "top_k": 5
+  },
+  {
+    "query_id": "q034",
+    "query": "vigencia aprobada vigencia policy",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_validity_v1"],
+    "expected_policy_type": "validity",
+    "top_k": 5
+  },
+  {
+    "query_id": "q035",
+    "query": "approval scope_hash expiración 24h",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_approval_risk_v1"],
+    "expected_policy_type": "approval_risk",
+    "top_k": 5
+  },
+  {
+    "query_id": "q036",
+    "query": "presupuesto normativa límite 5000",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_budget_v1"],
+    "expected_policy_type": "budget_limit",
+    "top_k": 5
+  },
+  {
+    "query_id": "q037",
+    "query": "supplier activo tenant_demo",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_supplier_allowlist_v1"],
+    "expected_policy_type": "supplier_allowlist",
+    "top_k": 5
+  },
+  {
+    "query_id": "q038",
+    "query": "shortage calculado 138 units",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_inventory_coverage_v1"],
+    "expected_policy_type": "inventory_coverage",
+    "top_k": 5
+  },
+  {
+    "query_id": "q039",
+    "query": "global approved version 1.0.0",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_validity_v1"],
+    "expected_policy_type": "validity",
+    "top_k": 5
+  },
+  {
+    "query_id": "q040",
+    "query": "risk high 2 approvals required",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_approval_risk_v1"],
+    "expected_policy_type": "approval_risk",
+    "top_k": 5
+  },
+  {
+    "query_id": "q041",
+    "query": "Política límite 5000 USD tenant_demo warehouse_north vigente",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_budget_v1"],
+    "expected_policy_type": "budget_limit",
+    "top_k": 5
+  },
+  {
+    "query_id": "q042",
+    "query": "Política proveedores supplier_demo supplier_alt",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_supplier_allowlist_v1"],
+    "expected_policy_type": "supplier_allowlist",
+    "top_k": 5
+  },
+  {
+    "query_id": "q043",
+    "query": "Política cobertura 21 días demanda 8 lead 7",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_inventory_coverage_v1"],
+    "expected_policy_type": "inventory_coverage",
+    "top_k": 5
+  },
+  {
+    "query_id": "q044",
+    "query": "Política validez global 2025",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_validity_v1"],
+    "expected_policy_type": "validity",
+    "top_k": 5
+  },
+  {
+    "query_id": "q045",
+    "query": "Política aprobación riesgo alto 2",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_approval_risk_v1"],
+    "expected_policy_type": "approval_risk",
+    "top_k": 5
+  },
+  {
+    "query_id": "q046",
+    "query": "delegated limit 5000 budget",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_budget_v1"],
+    "expected_policy_type": "budget_limit",
+    "top_k": 5
+  },
+  {
+    "query_id": "q047",
+    "query": "allowlist supplier",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_supplier_allowlist_v1"],
+    "expected_policy_type": "supplier_allowlist",
+    "top_k": 5
+  },
+  {
+    "query_id": "q048",
+    "query": "faltante 138 total 1380",
+    "tenant_id": "tenant_demo",
+    "location_id": "warehouse_north",
+    "jurisdiction": "global",
+    "expected_docs": ["policy_inventory_coverage_v1"],
+    "expected_policy_type": "inventory_coverage",
+    "top_k": 5
+  },
+  {
+    "query_id": "q049",
+    "query": "approved internal public",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_validity_v1"],
+    "expected_policy_type": "validity",
+    "top_k": 5
+  },
+  {
+    "query_id": "q050",
+    "query": "partially_approved requires 2",
+    "tenant_id": "tenant_demo",
+    "location_id": null,
+    "jurisdiction": "global",
+    "expected_docs": ["policy_approval_risk_v1"],
+    "expected_policy_type": "approval_risk",
+    "top_k": 5
+  }
+]

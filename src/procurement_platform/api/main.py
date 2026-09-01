@@ -224,7 +224,10 @@ def create_execution(
     if principal.auth_method != "anonymous" and principal.tenant_id != payload.tenant_id:
         raise HTTPException(
             status_code=403,
-            detail={"code": "tenant_forbidden", "message": f"principal tenant {principal.tenant_id} != payload {payload.tenant_id}"},
+            detail={
+                "code": "tenant_forbidden",
+                "message": f"principal tenant {principal.tenant_id} != payload {payload.tenant_id}",
+            },
         )
     # idempotency: buscar key
     key = idempotency_key or payload.idempotency_key
@@ -371,12 +374,14 @@ def list_events(
     # if cursor present, need to check remaining beyond rows
     if cursor and rows:
         # compute remaining count heuristic: total filtered vs rows
-        has_more = base_q.filter(
-            AuditEventRow.timestamp > rows[-1].timestamp
-        ).count() > 0 or base_q.filter(
-            (AuditEventRow.timestamp == rows[-1].timestamp)
-            & (AuditEventRow.event_id > rows[-1].event_id)
-        ).count() > 0
+        has_more = (
+            base_q.filter(AuditEventRow.timestamp > rows[-1].timestamp).count() > 0
+            or base_q.filter(
+                (AuditEventRow.timestamp == rows[-1].timestamp)
+                & (AuditEventRow.event_id > rows[-1].event_id)
+            ).count()
+            > 0
+        )
         # simplify: if we got limit rows, assume may have more
         has_more = len(rows) == limit
     next_cursor = rows[-1].event_id if has_more else None
@@ -407,14 +412,21 @@ def list_events(
 # Approvals — Fase 5 con snapshot inmutable, expiración, scope_hash y doble aprobación
 # ---------------------------------------------------------------------------
 @app.get("/v1/approvals/{approval_id}", tags=["approvals"])
-def get_approval(approval_id: str, db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
+def get_approval(
+    approval_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
     # buscar por approval_id (scan Fase 1-5)
     rows = db.query(WorkflowExecution).all()
     for row in rows:
         appr = row.approval_request
         if appr and appr.get("approval_id") == approval_id:
             if principal.auth_method != "anonymous" and principal.tenant_id != row.tenant_id:
-                raise HTTPException(status_code=403, detail={"code": "tenant_forbidden", "message": "tenant mismatch"})
+                raise HTTPException(
+                    status_code=403,
+                    detail={"code": "tenant_forbidden", "message": "tenant mismatch"},
+                )
             # verificar expiración automática al consultar
             try:
                 orchestrator._check_and_expire_if_needed(db, row, trace_id=None)
@@ -497,9 +509,18 @@ def decide_approval(
         from procurement_platform.security.rbac import has_role
 
         if principal.tenant_id != target_exec.tenant_id:
-            raise HTTPException(status_code=403, detail={"code": "tenant_forbidden", "message": "approver tenant mismatch"})
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "tenant_forbidden", "message": "approver tenant mismatch"},
+            )
         if not has_role(principal, "approver"):
-            raise HTTPException(status_code=403, detail={"code": "forbidden", "message": f"role approver required, has {principal.roles}"})
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "forbidden",
+                    "message": f"role approver required, has {principal.roles}",
+                },
+            )
 
     execution_id = target_exec.execution_id
     trace_id = request.state.trace_id
@@ -631,10 +652,102 @@ def resume_execution(execution_id: str, request: Request, db: Session = Depends(
 
 @app.post("/v1/documents", tags=["documents"])
 def upload_document(payload: dict, request: Request, db: Session = Depends(get_db)):
-    """Ingesta RAG Fase 3: valida, clasifica, detecta injection y genera embeddings."""
+    """Ingesta RAG Fase 3 + F4-6 GCS: valida, clasifica, detecta injection, embeddings, version history."""
     from datetime import UTC, datetime
 
     from procurement_platform.rag.models import Document, DocumentMetadata
+
+    gcs_uri = payload.get("gcs_uri")
+    # F4-6: si viene gcs_uri sin content, delegar a GCSIngestor
+    if gcs_uri and not payload.get("content"):
+        # requiere al menos tenant y gcs_uri
+        tenant_id = payload.get("tenant_id", "tenant_demo")
+        title = payload.get("title", f"GCS {gcs_uri}")
+
+        # construir metadata_kwargs para GCS
+        def parse_dt(v):
+            if not v:
+                return None
+            try:
+                return datetime.fromisoformat(v.replace("Z", "+00:00"))
+            except Exception:
+                return None
+
+        metadata_kwargs = {
+            "document_id": payload.get("document_id")
+            or gcs_uri.replace("gs://", "").replace("/", "_")[:64],
+            "tenant_id": tenant_id,
+            "title": title,
+            "doc_type": payload.get("doc_type", "policy"),
+            "classification": payload.get("classification", "internal"),
+            "jurisdiction": payload.get("jurisdiction", "global"),
+            "location_id": payload.get("location_id"),
+            "version": payload.get("version", "1.0.0"),
+            "valid_from": parse_dt(payload.get("valid_from")) or datetime.now(UTC),
+            "valid_to": parse_dt(payload.get("valid_to")),
+            "status": payload.get("status", "approved"),
+            "allowed_tenants": payload.get("allowed_tenants", [tenant_id]),
+        }
+        rag = get_rag_service()
+        try:
+            status, chunks = rag.ingest_from_gcs(
+                gcs_uri=gcs_uri,
+                metadata_kwargs=metadata_kwargs,
+                db=db,
+                allow_reindex=bool(payload.get("allow_reindex", False)),
+            )
+            # audit
+            create_audit_event(
+                db,
+                execution_id="no_exec",
+                request_id=request.state.request_id,
+                event_type=f"rag.ingestion.{status}",
+                actor_type="system",
+                actor_id="rag_service",
+                trace_id=request.state.trace_id,
+                details={
+                    "document_id": metadata_kwargs["document_id"],
+                    "chunks": len(chunks),
+                    "status": status,
+                    "gcs_uri": gcs_uri,
+                    "version": metadata_kwargs["version"],
+                },
+            )
+            db.commit()
+            http_status = (
+                200
+                if status == "indexed"
+                else 409
+                if status == "duplicate"
+                else 422
+                if status in ("rejected", "quarantined")
+                else 200
+            )
+            # fetch updated doc hash if available
+            from procurement_platform.persistence.models import DocumentRow
+
+            doc_row = db.get(DocumentRow, metadata_kwargs["document_id"]) if db else None
+            content_hash = doc_row.content_hash if doc_row and doc_row.content_hash else None
+            sec_flags = doc_row.security_flags if doc_row and doc_row.security_flags else []
+            is_mal = bool(doc_row.is_malicious) if doc_row else False
+            return JSONResponse(
+                status_code=http_status,
+                content={
+                    "status": status,
+                    "document_id": metadata_kwargs["document_id"],
+                    "chunks_created": len(chunks),
+                    "content_hash": content_hash,
+                    "security_flags": sec_flags,
+                    "is_malicious": is_mal,
+                    "gcs_uri": gcs_uri,
+                    "version": metadata_kwargs["version"],
+                    "request_id": request.state.request_id,
+                },
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=422, detail={"code": "gcs_ingest_failed", "message": str(e)}
+            )
 
     # payload esperado: {tenant_id, title, content, doc_type, classification, jurisdiction, version, valid_from, valid_to, ...}
     tenant_id = payload.get("tenant_id", "tenant_demo")
@@ -678,14 +791,50 @@ def upload_document(payload: dict, request: Request, db: Session = Depends(get_d
         allowed_tenants=payload.get("allowed_tenants", [tenant_id]),
     )
     document = Document(metadata=metadata, content=content, pages=payload.get("pages", []))
+    # attach gcs_uri if present alongside content (F4-6)
+    if gcs_uri:
+        document.__dict__["_gcs_uri"] = gcs_uri  # type: ignore
 
     rag = get_rag_service()
+    # F4-6: allow_reindex if version bump
+    allow_reindex = bool(payload.get("allow_reindex", False))
     status, chunks = rag.ingest_document(
         document=document,
         filename=payload.get("filename"),
         actor_id=request.state.request_id,
         db=db,
     )
+    # if duplicate but allow_reindex True, retry with flag
+    if status == "duplicate" and allow_reindex:
+        # re-invoke pipeline with allow_reindex
+
+        # use same rag pipeline but force
+        # we simulate by clearing dedup for this doc hash and retrying
+        # fallback: call pipeline directly with allow_reindex
+        try:
+            # clear specific hash to allow reindex
+            rag.pipeline._seen_hashes.discard(document.metadata.content_hash or "")  # type: ignore
+            # also need to handle gcs path: retry
+            status, chunks = rag.pipeline.ingest(
+                document=document, filename=payload.get("filename"), allow_reindex=True
+            )
+            if status == "indexed":
+                rag.retrieval.index_chunks(chunks)
+                rag._persist_chunks(db, document, chunks)  # type: ignore
+                rag._ingestion_log.append(  # type: ignore
+                    {
+                        "document_id": document.metadata.document_id,
+                        "status": status,
+                        "chunks": len(chunks),
+                        "hash": document.metadata.content_hash,
+                        "flags": document.metadata.security_flags,
+                        "actor_id": request.state.request_id,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "reindexed": True,
+                    }
+                )
+        except Exception:
+            pass
 
     # audit
     create_audit_event(
@@ -701,6 +850,8 @@ def upload_document(payload: dict, request: Request, db: Session = Depends(get_d
             "chunks": len(chunks),
             "status": status,
             "security_flags": document.metadata.security_flags,
+            "gcs_uri": gcs_uri,
+            "version": version,
         },
     )
     db.commit()
@@ -723,6 +874,8 @@ def upload_document(payload: dict, request: Request, db: Session = Depends(get_d
             "content_hash": document.metadata.content_hash,
             "security_flags": document.metadata.security_flags,
             "is_malicious": document.metadata.is_malicious,
+            "gcs_uri": gcs_uri,
+            "version": version,
             "request_id": request.state.request_id,
         },
     )
@@ -735,9 +888,13 @@ def rag_search(
     location_id: str | None = None,
     jurisdiction: str | None = None,
     top_k: int = 5,
+    use_reranker: bool | None = None,
     db: Session = Depends(get_db),
 ):
-    """Endpoint de debug para RAG — Fase 3 (no expone documentos fuera de permiso)."""
+    """Endpoint de debug para RAG — Fase 3 (no expone documentos fuera de permiso).
+
+    F4-4: soporta ?use_reranker=true para re-ranking cross-encoder.
+    """
     rag = get_rag_service()
     res = rag.retrieve(
         query=query,
@@ -745,6 +902,7 @@ def rag_search(
         location_id=location_id,
         jurisdiction=jurisdiction,
         top_k=top_k,
+        use_reranker=use_reranker,
     )
     # no exponer texto completo si es confidencial; aquí retornamos citas y scores
     return {
@@ -762,7 +920,96 @@ def rag_search(
         ],
         "warnings": res["warnings"],
         "conflict": res["conflict"],
+        "reranked": res.get("reranked", False),
     }
+
+
+@app.post("/v1/rag/feedback", tags=["rag"])
+def rag_feedback(
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    """F4-5: feedback loop thumbs up/down — {chunk_id, useful, tenant_id?}."""
+    chunk_id = payload.get("chunk_id")
+    useful = payload.get("useful")
+    tenant_id = payload.get("tenant_id") or principal.tenant_id
+    if not chunk_id or useful is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "validation_error", "message": "chunk_id and useful required"},
+        )
+    if not isinstance(useful, bool):
+        # permitir "true"/"false" strings
+        if isinstance(useful, str):
+            useful = useful.lower() in ("true", "1", "yes", "up")
+        else:
+            useful = bool(useful)
+    # tenant check: if principal authenticated, enforce tenant match vs row tenant
+    try:
+        from procurement_platform.rag.feedback_store import record_feedback
+
+        result = record_feedback(
+            db,
+            chunk_id=chunk_id,
+            useful=useful,
+            actor_id=principal.sub,
+            tenant_id=tenant_id if principal.auth_method != "anonymous" else None,
+        )
+    except ValueError as e:
+        if "tenant mismatch" in str(e):
+            raise HTTPException(
+                status_code=403, detail={"code": "tenant_forbidden", "message": str(e)}
+            )
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(e)})
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "not_found", "message": f"chunk {chunk_id} not found: {e}"},
+        )
+    # audit
+    try:
+        create_audit_event(
+            db,
+            execution_id="no_exec",
+            request_id=request.state.request_id,
+            event_type="rag.feedback.recorded",
+            actor_type="human" if principal.auth_method != "anonymous" else "system",
+            actor_id=principal.sub,
+            trace_id=request.state.trace_id,
+            details={
+                "chunk_id": chunk_id,
+                "useful": useful,
+                "feedback_score": result["feedback_score"],
+            },
+        )
+        db.commit()
+    except Exception:
+        pass
+    return result
+
+
+@app.get("/v1/rag/feedback", tags=["rag"])
+def rag_feedback_stats(
+    chunk_id: str | None = None,
+    tenant_id: str = "tenant_demo",
+    limit: int = 10,
+    db: Session = Depends(get_db),
+):
+    """Lista feedback stats por tenant o por chunk."""
+    if chunk_id:
+        from procurement_platform.rag.feedback_store import get_feedback_stats
+
+        stats = get_feedback_stats(db, chunk_id)
+        if not stats:
+            raise HTTPException(
+                status_code=404, detail={"code": "not_found", "message": "chunk not found"}
+            )
+        return stats
+    from procurement_platform.rag.feedback_store import list_top_feedback
+
+    return {"tenant_id": tenant_id, "results": list_top_feedback(db, tenant_id, limit=limit)}
 
 
 # ---------------------------------------------------------------------------
