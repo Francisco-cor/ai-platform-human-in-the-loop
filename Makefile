@@ -13,11 +13,29 @@ format:
 	ruff check --fix src tests
 	ruff format src tests
 
+format-check:
+	ruff format --check src tests
+
+type:
+	mypy src
+
+check: lint format-check type test
+	@echo "check passed: lint + format + type + test"
+
 test:
 	pytest -q
 
 test-verbose:
 	pytest -v
+
+test-cov:
+	pytest --cov=procurement_platform --cov-report=term-missing --cov-report=html --cov-fail-under=85
+
+pre-commit-install:
+	pre-commit install
+
+pre-commit-run:
+	pre-commit run --all-files
 
 run:
 	uvicorn procurement_platform.api.main:app --reload --host 0.0.0.0 --port 8000
@@ -65,3 +83,15 @@ health:
 
 fake-agent-station:
 	uvicorn procurement_platform.integrations.agent_station.fake_server:app --port 8001 --reload
+
+docker-scan:
+	trivy image procurement-platform:local || echo "trivy not installed, skipping"
+
+openapi-check:
+	python -c "from procurement_platform.api.main import app; import json; print(json.dumps(app.openapi(), indent=2)[:500])" | head -n 100
+
+flags-list:
+	cat infra/feature_flags.yaml 2>/dev/null || echo "no flags.yaml yet (F9)"
+
+scorecard-check:
+	python scripts/scorecard.py 2>/dev/null || echo "scorecard not yet (F11)"

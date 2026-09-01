@@ -26,17 +26,48 @@ from procurement_platform.persistence.database import (
 def setup_test_db():
     reset_settings_cache()
     reset_engine_cache()
-    # ensure clean db file
+    # ensure clean db file — handle Windows file lock
     if os.path.exists("./test.db"):
-        os.remove("./test.db")
+        try:
+            os.remove("./test.db")
+        except PermissionError:
+            # file locked by previous run; try dispose and retry
+            try:
+                # attempt to dispose any existing engine and retry
+                from procurement_platform.persistence.database import get_engine as _ge
+
+                try:
+                    _ge().dispose()
+                except Exception:
+                    pass
+                reset_engine_cache()
+                import time as _time
+                import gc as _gc
+
+                _gc.collect()
+                _time.sleep(0.1)
+                if os.path.exists("./test.db"):
+                    os.remove("./test.db")
+            except Exception:
+                # fallback: try to clear via SQL if file remains
+                pass
     engine = get_engine()
     # import models
     import procurement_platform.persistence.models  # noqa: F401
 
+    # ensure tables exist even if file not removed (drop+create for isolation)
+    try:
+        Base.metadata.drop_all(bind=engine)
+    except Exception:
+        pass
     Base.metadata.create_all(bind=engine)
     yield
     # teardown
-    engine.dispose()
+    try:
+        engine.dispose()
+    except Exception:
+        pass
+    reset_engine_cache()
     if os.path.exists("./test.db"):
         try:
             os.remove("./test.db")
