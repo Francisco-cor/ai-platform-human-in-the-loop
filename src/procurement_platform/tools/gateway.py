@@ -91,6 +91,15 @@ def _gateway_lock(key: str) -> _threading.Lock:
         return _GATEWAY_LOCKS[key]
 
 
+def _get_lock_manager_gateway():
+    try:
+        from procurement_platform.infra.locks.manager import get_lock_manager
+
+        return get_lock_manager()
+    except Exception:
+        return None
+
+
 class ToolGateway:
     """Gateway síncrono — Fase 4-5 con store global idempotente."""
 
@@ -225,18 +234,26 @@ class ToolGateway:
         self.budget.check_and_increment(tool_name)
         # 5. aprobación
         self._check_approval(tool_name, has_approval)
-        # 6. idempotencia — Fase 5: lock por idempotency key + store global
+        # 6. idempotencia — Fase 5: lock por idempotency key + store global (via LockManager)
         key = idempotency_key or self._idempotency_key(execution_id, tool_name, payload)
         # fast path sin lock
         if key in self._idempotency:
             return self._idempotency[key]
-        lock = _gateway_lock(key)
-        # intentar adquirir; si ya está locked, esperar y reintentar
-        if not lock.acquire(blocking=True, timeout=2):
-            # timeout adquiriendo — si ya existe valor, retornar
-            if key in self._idempotency:
-                return self._idempotency[key]
-            raise ToolGatewayError("conflict", "gateway lock timeout", {"tool": tool_name})
+        mgr = _get_lock_manager_gateway()
+        lock = None
+        use_mgr = mgr is not None
+        if use_mgr:
+            acquired = mgr.acquire(f"gateway:{key}", blocking=True, timeout=2.0)
+            if not acquired:
+                if key in self._idempotency:
+                    return self._idempotency[key]
+                raise ToolGatewayError("conflict", "gateway lock timeout", {"tool": tool_name})
+        else:
+            lock = _gateway_lock(key)
+            if not lock.acquire(blocking=True, timeout=2):
+                if key in self._idempotency:
+                    return self._idempotency[key]
+                raise ToolGatewayError("conflict", "gateway lock timeout", {"tool": tool_name})
         try:
             if key in self._idempotency:
                 return self._idempotency[key]
@@ -262,10 +279,16 @@ class ToolGateway:
             self._idempotency[key] = result
             return result
         finally:
-            try:
-                lock.release()
-            except Exception:
-                pass
+            if use_mgr:
+                try:
+                    mgr.release(f"gateway:{key}")
+                except Exception:
+                    pass
+            else:
+                try:
+                    lock.release()  # type: ignore[union-attr]
+                except Exception:
+                    pass
 
     def _execute_simulated(self, tool_name: str, payload: dict, execution_id: str) -> dict:
         # Simulación determinista para Fase 4

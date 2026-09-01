@@ -118,7 +118,20 @@ def _reset_gateway_global():
             svc.clear()
     except Exception:
         pass
+    # F1-3: reset lock manager
+    try:
+        from procurement_platform.infra.locks.manager import reset_lock_manager
+
+        reset_lock_manager()
+    except Exception:
+        pass
     yield
+    try:
+        from procurement_platform.infra.locks.manager import reset_lock_manager
+
+        reset_lock_manager()
+    except Exception:
+        pass
 
 
 @pytest.fixture()

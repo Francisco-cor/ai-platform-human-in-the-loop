@@ -239,11 +239,24 @@ def _seed_default_policies(rag: Any) -> None:
 
 
 # Locks por execution para Fase 5 — idempotencia y prevención de duplicación
+# Ahora delegado a LockManager (infra/locks) con fallback a threading para compatibilidad tests
 _execution_locks: dict[str, threading.Lock] = {}
 _execution_locks_guard = threading.Lock()
 
 
+def _get_lock_manager_orchestrator():
+    try:
+        from procurement_platform.infra.locks.manager import get_lock_manager
+
+        return get_lock_manager()
+    except Exception:
+        return None
+
+
 def _acquire_execution_lock(execution_id: str, blocking: bool = False) -> bool:
+    mgr = _get_lock_manager_orchestrator()
+    if mgr is not None:
+        return mgr.acquire(f"orchestrator:{execution_id}", blocking=blocking, timeout=1.0)
     with _execution_locks_guard:
         if execution_id not in _execution_locks:
             _execution_locks[execution_id] = threading.Lock()
@@ -252,6 +265,13 @@ def _acquire_execution_lock(execution_id: str, blocking: bool = False) -> bool:
 
 
 def _release_execution_lock(execution_id: str) -> None:
+    mgr = _get_lock_manager_orchestrator()
+    if mgr is not None:
+        try:
+            mgr.release(f"orchestrator:{execution_id}")
+            return
+        except Exception:
+            pass
     with _execution_locks_guard:
         lock = _execution_locks.get(execution_id)
     if lock and lock.locked():

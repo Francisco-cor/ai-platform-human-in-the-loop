@@ -29,8 +29,8 @@ from procurement_platform.domain.models import (
 from procurement_platform.persistence.models import WorkflowExecution
 
 # ---------------------------------------------------------------------------
-# In-memory lock manager (Fase 5 — Fase 1 sin Redis distribuido)
-# En producción usar Redis redlock; aquí usamos threading.Lock por execution_id
+# Lock manager — Fase 5 in-memory, Fase 1-3 abstraction to Redis via infra.locks
+# Mantiene _locks para compatibilidad tests, pero delega a LockManager para prod
 # ---------------------------------------------------------------------------
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
@@ -41,6 +41,15 @@ def _get_lock(execution_id: str) -> threading.Lock:
         if execution_id not in _locks:
             _locks[execution_id] = threading.Lock()
         return _locks[execution_id]
+
+
+def _get_lock_manager():
+    try:
+        from procurement_platform.infra.locks.manager import get_lock_manager
+
+        return get_lock_manager()
+    except Exception:
+        return None
 
 
 class ApprovalError(RuntimeError):
@@ -213,10 +222,14 @@ def decide_approval(
         raise ApprovalError("not_found", f"approval {approval_id} not found")
     row, appr = found
     execution_id = row.execution_id
-    # lock per execution to avoid races
-    lock = _get_lock(execution_id)
-    # Try to acquire non-blocking; if busy raise retryable
-    acquired = lock.acquire(blocking=False)
+    # lock per execution to avoid races — via LockManager (memory or redis)
+    mgr = _get_lock_manager()
+    lock_key = f"approval:{execution_id}"
+    if mgr is not None:
+        acquired = mgr.acquire(lock_key, blocking=False, timeout=1.0)
+    else:
+        lock = _get_lock(execution_id)
+        acquired = lock.acquire(blocking=False)
     if not acquired:
         raise ApprovalError(
             "conflict",
@@ -387,7 +400,13 @@ def decide_approval(
         appr = ApprovalRequest.model_validate(row.approval_request)
         return row, appr, {"idempotent": False}
     finally:
-        try:
-            lock.release()
-        except Exception:
-            pass
+        if mgr is not None:
+            try:
+                mgr.release(lock_key)
+            except Exception:
+                pass
+        else:
+            try:
+                lock.release()
+            except Exception:
+                pass
