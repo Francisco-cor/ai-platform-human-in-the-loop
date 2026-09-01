@@ -407,12 +407,14 @@ def list_events(
 # Approvals — Fase 5 con snapshot inmutable, expiración, scope_hash y doble aprobación
 # ---------------------------------------------------------------------------
 @app.get("/v1/approvals/{approval_id}", tags=["approvals"])
-def get_approval(approval_id: str, db: Session = Depends(get_db)):
+def get_approval(approval_id: str, db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
     # buscar por approval_id (scan Fase 1-5)
     rows = db.query(WorkflowExecution).all()
     for row in rows:
         appr = row.approval_request
         if appr and appr.get("approval_id") == approval_id:
+            if principal.auth_method != "anonymous" and principal.tenant_id != row.tenant_id:
+                raise HTTPException(status_code=403, detail={"code": "tenant_forbidden", "message": "tenant mismatch"})
             # verificar expiración automática al consultar
             try:
                 orchestrator._check_and_expire_if_needed(db, row, trace_id=None)
@@ -456,6 +458,7 @@ def decide_approval(
     request: Request,
     db: Session = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    principal: Principal = Depends(get_current_principal),
 ):
     # payload = {decision, decided_by, reason, scope_hash?}
     decision = payload.get("decision")
@@ -489,6 +492,14 @@ def decide_approval(
         raise HTTPException(
             status_code=404, detail={"code": "not_found", "message": "approval not found"}
         )
+    # F3-4: RBAC/ABAC — approver must be same tenant and have approver role (if authenticated)
+    if principal.auth_method != "anonymous":
+        from procurement_platform.security.rbac import has_role
+
+        if principal.tenant_id != target_exec.tenant_id:
+            raise HTTPException(status_code=403, detail={"code": "tenant_forbidden", "message": "approver tenant mismatch"})
+        if not has_role(principal, "approver"):
+            raise HTTPException(status_code=403, detail={"code": "forbidden", "message": f"role approver required, has {principal.roles}"})
 
     execution_id = target_exec.execution_id
     trace_id = request.state.trace_id
