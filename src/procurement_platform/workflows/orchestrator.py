@@ -1330,145 +1330,204 @@ class WorkflowOrchestrator:
     def resume_durable(
         self, db: Session, execution_id: str, *, trace_id: str | None = None
     ) -> Execution:
-        """Reanudación durable — Fase 5.
+        """Reanudación durable — Fase 5 + F2-3 parcial replay.
 
         Se puede llamar tras reinicio, tras timeout, o tras aprobación parcial.
-        Si la ejecución está en AWAITING_APPROVAL pero ya tiene aprobación `approved`,
-        avanza a ACTION_EXECUTED → VERIFIED → COMPLETED de forma idempotente.
-        Si está en APPROVED pero no ejecutada, ejecuta.
-        Si ya está terminal, no hace nada.
+        - Si está en AWAITING_APPROVAL pero ya tiene aprobación `approved`, avanza a COMPLETED.
+        - Si está en APPROVED pero no ejecutada, ejecuta.
+        - Si está en estados intermedios (RECEIVED..POLICY_CHECKED), reanuda desde último checkpoint con retry.
+        - Si ya está terminal, no hace nada.
         Nunca ejecuta sin aprobación vigente.
         """
         row = db.get(WorkflowExecution, execution_id)
         if not row:
             raise ValueError("not found")
-        # verificar expiración primero
-        if self._check_and_expire_if_needed(db, row, trace_id=trace_id):
-            row = db.get(WorkflowExecution, execution_id)  # type: ignore
-            return _serialize_execution(row)  # type: ignore
-        current = ExecutionState(row.status)
-        if current in {
-            ExecutionState.COMPLETED,
-            ExecutionState.REJECTED,
-            ExecutionState.EXPIRED,
-            ExecutionState.BLOCKED,
-            ExecutionState.FAILED_TERMINAL,
-        }:
-            return _serialize_execution(row)
-        if current == ExecutionState.AWAITING_APPROVAL:
-            # ¿tiene aprobación ya aprobada?
-            if row.approval_request:
-                appr = ApprovalRequest.model_validate(row.approval_request)
-                if appr.status == ApprovalStatus.approved:
-                    # avanzar
-                    self._safe_transition(
-                        db,
-                        execution_id,
-                        ExecutionState.APPROVED,
-                        node="wait_for_human_decision",
-                        trace_id=trace_id,
-                        actor_type="human",
-                        actor_id=appr.decided_by or "system",
-                    )
-                    row = db.get(WorkflowExecution, execution_id)  # type: ignore
-                    try:
-                        self._execute_purchase_order_if_needed(db, row, trace_id=trace_id)  # type: ignore
-                    except Exception as e:
-                        # si falla por scope_mismatch o approval_required → BLOCKED
-                        msg = str(e)
-                        if "scope_mismatch" in msg or "approval" in msg.lower():
-                            create_audit_event(
-                                db,
-                                execution_id=row.execution_id,
-                                request_id=row.request_id,
-                                event_type="execution.blocked",
-                                actor_type="system",
-                                actor_id="orchestrator",
-                                trace_id=trace_id,
-                                details={"reason": msg, "blocked_by": "resume_scope_check"},
-                            )
-                            db.flush()
-                            self._safe_transition(
-                                db,
-                                execution_id,
-                                ExecutionState.BLOCKED,
-                                node="execute_purchase_order",
-                                trace_id=trace_id,
-                            )
-                            return self.get_execution(db, execution_id)  # type: ignore
-                        raise
-                    self._safe_transition(
-                        db,
-                        execution_id,
-                        ExecutionState.ACTION_EXECUTED,
-                        node="execute_purchase_order",
-                        trace_id=trace_id,
-                    )
-                    self._safe_transition(
-                        db,
-                        execution_id,
-                        ExecutionState.VERIFIED,
-                        node="verify_execution",
-                        trace_id=trace_id,
-                    )
-                    self._safe_transition(
-                        db,
-                        execution_id,
-                        ExecutionState.COMPLETED,
-                        node="summarize_and_close",
-                        trace_id=trace_id,
-                    )
-                    return self.get_execution(db, execution_id)  # type: ignore
-            # sigue esperando aprobación
-            return _serialize_execution(row)
-        if current == ExecutionState.APPROVED:
-            row = db.get(WorkflowExecution, execution_id)  # type: ignore
-            try:
-                self._execute_purchase_order_if_needed(db, row, trace_id=trace_id)  # type: ignore
-            except Exception as e:
-                msg = str(e)
+        # F2-3: acquire execution lock for durable resume (via LockManager)
+        if not _acquire_execution_lock(execution_id, blocking=False):
+            raise ValueError("execution locked — concurrent resume in progress")
+        try:
+            # verificar expiración primero
+            if self._check_and_expire_if_needed(db, row, trace_id=trace_id):
+                row = db.get(WorkflowExecution, execution_id)  # type: ignore
+                return _serialize_execution(row)  # type: ignore
+            # F2-3: checkpoint-aware partial resume for early states
+            early_states = {
+                ExecutionState.RECEIVED,
+                ExecutionState.NORMALIZED,
+                ExecutionState.CONTEXT_LOADED,
+                ExecutionState.POLICY_RETRIEVED,
+                ExecutionState.SHORTAGE_CALCULATED,
+                ExecutionState.SUPPLIERS_QUERIED,
+                ExecutionState.PROPOSAL_DRAFTED,
+                ExecutionState.POLICY_CHECKED,
+            }
+            if ExecutionState(row.status) in early_states:
+                # audit resume attempt
                 create_audit_event(
                     db,
                     execution_id=row.execution_id,
                     request_id=row.request_id,
-                    event_type="execution.blocked",
+                    event_type="execution.resume.attempt",
                     actor_type="system",
                     actor_id="orchestrator",
                     trace_id=trace_id,
-                    details={"reason": msg},
+                    details={"from_state": row.status, "checkpoint_node": row.current_node},
                 )
                 db.flush()
+                # re-run synthetic advance from current state; idempotent and handles already applied nodes
+                try:
+                    # lightweight retry with backoff for transient failures (e.g., gateway timeout)
+                    import time as _time
+
+                    for attempt in range(3):
+                        try:
+                            result = self.advance_synthetic(db, execution_id, trace_id=trace_id)
+                            return result
+                        except Exception as e:
+                            msg = str(e)
+                            if "budget_exceeded" in msg or "not_allowed" in msg or "scope_mismatch" in msg:
+                                raise
+                            if attempt == 2:
+                                raise
+                            _time.sleep(0.05 * (2**attempt))
+                except Exception as e:
+                    create_audit_event(
+                        db,
+                        execution_id=row.execution_id,
+                        request_id=row.request_id,
+                        event_type="execution.resume.failed",
+                        actor_type="system",
+                        actor_id="orchestrator",
+                        trace_id=trace_id,
+                        details={"error": str(e)[:300]},
+                    )
+                    db.flush()
+                    raise
+            current = ExecutionState(row.status)
+            if current in {
+                ExecutionState.COMPLETED,
+                ExecutionState.REJECTED,
+                ExecutionState.EXPIRED,
+                ExecutionState.BLOCKED,
+                ExecutionState.FAILED_TERMINAL,
+            }:
+                return _serialize_execution(row)
+            if current == ExecutionState.AWAITING_APPROVAL:
+                # ¿tiene aprobación ya aprobada?
+                if row.approval_request:
+                    appr = ApprovalRequest.model_validate(row.approval_request)
+                    if appr.status == ApprovalStatus.approved:
+                        # avanzar
+                        self._safe_transition(
+                            db,
+                            execution_id,
+                            ExecutionState.APPROVED,
+                            node="wait_for_human_decision",
+                            trace_id=trace_id,
+                            actor_type="human",
+                            actor_id=appr.decided_by or "system",
+                        )
+                        row = db.get(WorkflowExecution, execution_id)  # type: ignore
+                        try:
+                            self._execute_purchase_order_if_needed(db, row, trace_id=trace_id)  # type: ignore
+                        except Exception as e:
+                            # si falla por scope_mismatch o approval_required → BLOCKED
+                            msg = str(e)
+                            if "scope_mismatch" in msg or "approval" in msg.lower():
+                                create_audit_event(
+                                    db,
+                                    execution_id=row.execution_id,
+                                    request_id=row.request_id,
+                                    event_type="execution.blocked",
+                                    actor_type="system",
+                                    actor_id="orchestrator",
+                                    trace_id=trace_id,
+                                    details={"reason": msg, "blocked_by": "resume_scope_check"},
+                                )
+                                db.flush()
+                                self._safe_transition(
+                                    db,
+                                    execution_id,
+                                    ExecutionState.BLOCKED,
+                                    node="execute_purchase_order",
+                                    trace_id=trace_id,
+                                )
+                                return self.get_execution(db, execution_id)  # type: ignore
+                            raise
+                        self._safe_transition(
+                            db,
+                            execution_id,
+                            ExecutionState.ACTION_EXECUTED,
+                            node="execute_purchase_order",
+                            trace_id=trace_id,
+                        )
+                        self._safe_transition(
+                            db,
+                            execution_id,
+                            ExecutionState.VERIFIED,
+                            node="verify_execution",
+                            trace_id=trace_id,
+                        )
+                        self._safe_transition(
+                            db,
+                            execution_id,
+                            ExecutionState.COMPLETED,
+                            node="summarize_and_close",
+                            trace_id=trace_id,
+                        )
+                        return self.get_execution(db, execution_id)  # type: ignore
+                # sigue esperando aprobación
+                return _serialize_execution(row)
+            if current == ExecutionState.APPROVED:
+                row = db.get(WorkflowExecution, execution_id)  # type: ignore
+                try:
+                    self._execute_purchase_order_if_needed(db, row, trace_id=trace_id)  # type: ignore
+                except Exception as e:
+                    msg = str(e)
+                    create_audit_event(
+                        db,
+                        execution_id=row.execution_id,
+                        request_id=row.request_id,
+                        event_type="execution.blocked",
+                        actor_type="system",
+                        actor_id="orchestrator",
+                        trace_id=trace_id,
+                        details={"reason": msg},
+                    )
+                    db.flush()
+                    self._safe_transition(
+                        db,
+                        execution_id,
+                        ExecutionState.BLOCKED,
+                        node="execute_purchase_order",
+                        trace_id=trace_id,
+                    )
+                    return self.get_execution(db, execution_id)  # type: ignore
                 self._safe_transition(
                     db,
                     execution_id,
-                    ExecutionState.BLOCKED,
+                    ExecutionState.ACTION_EXECUTED,
                     node="execute_purchase_order",
                     trace_id=trace_id,
                 )
+                self._safe_transition(
+                    db,
+                    execution_id,
+                    ExecutionState.VERIFIED,
+                    node="verify_execution",
+                    trace_id=trace_id,
+                )
+                self._safe_transition(
+                    db,
+                    execution_id,
+                    ExecutionState.COMPLETED,
+                    node="summarize_and_close",
+                    trace_id=trace_id,
+                )
                 return self.get_execution(db, execution_id)  # type: ignore
-            self._safe_transition(
-                db,
-                execution_id,
-                ExecutionState.ACTION_EXECUTED,
-                node="execute_purchase_order",
-                trace_id=trace_id,
-            )
-            self._safe_transition(
-                db,
-                execution_id,
-                ExecutionState.VERIFIED,
-                node="verify_execution",
-                trace_id=trace_id,
-            )
-            self._safe_transition(
-                db,
-                execution_id,
-                ExecutionState.COMPLETED,
-                node="summarize_and_close",
-                trace_id=trace_id,
-            )
-            return self.get_execution(db, execution_id)  # type: ignore
-        return _serialize_execution(row)
+            return _serialize_execution(row)
+        finally:
+            _release_execution_lock(execution_id)
 
     def approve_and_complete(
         self,
