@@ -13,7 +13,7 @@ def test_sqlite_engine_has_check_same_thread():
     # sqlite connect_args should include check_same_thread
     assert eng is not None
     # pool_pre_ping should be True
-    assert eng.pool is not None or True
+    assert eng.pool is not None
     eng.dispose()
     reset_engine_cache()
 

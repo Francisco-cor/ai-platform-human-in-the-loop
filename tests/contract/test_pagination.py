@@ -1,6 +1,5 @@
 """Contract tests for pagination and payload streaming — F1-4."""
 
-import pytest
 from fastapi.testclient import TestClient
 
 
