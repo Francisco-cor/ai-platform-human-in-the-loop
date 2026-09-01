@@ -10,7 +10,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from procurement_platform.rag.embeddings import FakeEmbedder, get_embedder
+from procurement_platform.rag.embeddings import Embedder, get_embedder
 from procurement_platform.rag.ingestion import IngestionPipeline
 from procurement_platform.rag.models import Chunk, Document, RetrievalQuery
 from procurement_platform.rag.retrieval import RetrievalService
@@ -21,17 +21,18 @@ class RagService:
     """Servicio RAG con boundary claro para dominio.
 
     Puede usarse in-memory (tests) o con persistencia DB/pgvector.
+    Fase 4: soporte reranker y feedback boosting.
     """
 
     def __init__(
         self,
-        embedder: FakeEmbedder | None = None,
+        embedder: Embedder | None = None,
         pipeline: IngestionPipeline | None = None,
         retrieval: RetrievalService | None = None,
     ) -> None:
-        self.embedder = embedder or get_embedder()
-        self.pipeline = pipeline or IngestionPipeline(embedder=self.embedder)
-        self.retrieval = retrieval or RetrievalService(embedder=self.embedder)
+        self.embedder = embedder or get_embedder()  # type: ignore
+        self.pipeline = pipeline or IngestionPipeline(embedder=self.embedder)  # type: ignore
+        self.retrieval = retrieval or RetrievalService(embedder=self.embedder)  # type: ignore
         # para auditoría
         self._ingestion_log: list[dict[str, Any]] = []
 
@@ -42,10 +43,11 @@ class RagService:
         filename: str | None = None,
         actor_id: str = "system",
         db: Session | None = None,
+        allow_reindex: bool = False,
     ) -> tuple[str, list[Chunk]]:
         """Ingesta un documento y lo indexa. Retorna (status, chunks)."""
         result, chunks = self.pipeline.ingest(
-            document=document, filename=filename, actor_id=actor_id
+            document=document, filename=filename, actor_id=actor_id, allow_reindex=allow_reindex
         )
         # log
         self._ingestion_log.append(
@@ -66,9 +68,48 @@ class RagService:
                 self._persist_chunks(db, document, chunks)
         return result.status, chunks
 
+    def ingest_from_gcs(
+        self,
+        *,
+        gcs_uri: str,
+        metadata_kwargs: dict[str, Any],
+        db: Session | None = None,
+        allow_reindex: bool = False,
+    ) -> tuple[str, list[Chunk]]:
+        """F4-6: ingesta desde GCS (gs://...). Delega a GCSIngestor."""
+        from procurement_platform.rag.ingestion import GCSIngestor
+
+        ingestor = GCSIngestor()
+        # GCSIngestor will handle download + pipeline ingest + DB persist with gcs_uri
+        # we pass our pipeline so dedup is shared
+        status, chunks = ingestor.ingest_from_gcs(
+            gcs_uri=gcs_uri,
+            metadata_kwargs=metadata_kwargs,
+            pipeline=self.pipeline,
+            db=db,
+            allow_reindex=allow_reindex,
+        )
+        if status == "indexed":
+            self.retrieval.index_chunks(chunks)
+            self._ingestion_log.append(
+                {
+                    "document_id": metadata_kwargs.get("document_id", gcs_uri),
+                    "status": status,
+                    "chunks": len(chunks),
+                    "gcs_uri": gcs_uri,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            )
+        return status, chunks
+
     def _persist_chunks(self, db: Session, document: Document, chunks: list[Chunk]) -> None:
         # Import aquí para evitar ciclo
         from procurement_platform.persistence.models import DocumentRow, DocumentChunkRow
+
+        # gcs_uri if present on document (F4-6)
+        gcs_uri = getattr(document, "_gcs_uri", None)  # type: ignore
+        if gcs_uri is None:
+            gcs_uri = document.__dict__.get("_gcs_uri")  # type: ignore
 
         # upsert document
         doc_row = db.get(DocumentRow, document.metadata.document_id)
@@ -94,9 +135,16 @@ class RagService:
                 security_flags=document.metadata.security_flags,
                 is_malicious=document.metadata.is_malicious,
                 content=document.content,
+                gcs_uri=gcs_uri,
                 updated_at=datetime.now(UTC),
             )
             db.add(doc_row)
+        else:
+            # update gcs_uri / version history if provided
+            if gcs_uri:
+                doc_row.gcs_uri = gcs_uri
+                doc_row.version = document.metadata.version
+                doc_row.updated_at = datetime.now(UTC)
         # upsert chunks
         for ch in chunks:
             row = db.get(DocumentChunkRow, ch.metadata.chunk_id)
@@ -121,6 +169,7 @@ class RagService:
                     security_flags=ch.metadata.security_flags,
                     text=ch.text,
                     embedding=ch.embedding,  # JSON para SQLite, vector para pgvector si se usa
+                    embedding_vec=ch.embedding,  # mirror for pgvector HNSW (F4-2)
                     embedding_model=ch.embedding_model,
                     updated_at=datetime.now(UTC),
                 )
@@ -136,16 +185,81 @@ class RagService:
         jurisdiction: str | None = None,
         policy_type: str | None = None,
         top_k: int = 5,
+        use_reranker: bool | None = None,
     ) -> dict[str, Any]:
+        # F4-4: reranker flag — if enabled, retrieve more then rerank
+        if use_reranker is None:
+            try:
+                from procurement_platform.config.settings import get_settings
+
+                use_reranker = bool(get_settings().reranker_enabled)
+            except Exception:
+                use_reranker = False
+        # if reranker enabled, fetch top_k*4 candidates then rerank to top_k
+        fetch_k = top_k * 4 if use_reranker else top_k
         q = RetrievalQuery(
             query=query,
             tenant_id=tenant_id,
             location_id=location_id,
             jurisdiction=jurisdiction,
             policy_type=policy_type,
-            top_k=top_k,
+            top_k=fetch_k,
         )
-        return self.retrieval.retrieve_with_validation(q)
+        res = self.retrieval.retrieve_with_validation(q)
+        if use_reranker and res["results"]:
+            try:
+                from procurement_platform.rag.reranker import get_reranker
+
+                reranker = get_reranker()
+                reranked = reranker.rerank(query, res["results"], top_k=top_k)
+                res["results"] = reranked
+                res["count"] = len(reranked)
+                res["reranked"] = True
+            except Exception:
+                res["reranked"] = False
+                # trim to top_k if we fetched more
+                res["results"] = res["results"][:top_k]
+                res["count"] = len(res["results"])
+        else:
+            # trim if fetched more without reranker (shouldn't happen)
+            if len(res["results"]) > top_k:
+                res["results"] = res["results"][:top_k]
+                res["count"] = len(res["results"])
+        return res
+
+    def retrieve_with_rerank(
+        self,
+        *,
+        query: str,
+        tenant_id: str,
+        location_id: str | None = None,
+        jurisdiction: str | None = None,
+        policy_type: str | None = None,
+        top_k: int = 5,
+    ) -> dict[str, Any]:
+        """F4-4: wrapper que fuerza reranker (top 20 -> top 5)."""
+        # fetch 20, rerank to top_k
+        q = RetrievalQuery(
+            query=query,
+            tenant_id=tenant_id,
+            location_id=location_id,
+            jurisdiction=jurisdiction,
+            policy_type=policy_type,
+            top_k=20,
+        )
+        res = self.retrieval.retrieve_with_validation(q)
+        try:
+            from procurement_platform.rag.reranker import get_reranker
+
+            reranker = get_reranker()
+            if res["results"]:
+                res["results"] = reranker.rerank(query, res["results"], top_k=top_k)
+                res["count"] = len(res["results"])
+                res["reranked"] = True
+        except Exception:
+            res["results"] = res["results"][:top_k]
+            res["count"] = len(res["results"])
+        return res
 
     def retrieve_for_execution(
         self,
