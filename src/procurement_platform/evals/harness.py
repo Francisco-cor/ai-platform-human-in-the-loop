@@ -131,11 +131,16 @@ def clear_db(db: Session) -> None:
         from procurement_platform.persistence.models import (
             AuditEventRow,
             IdempotencyKey,
+            OutboxEvent,
             WorkflowCheckpoint,
             WorkflowExecution,
         )
 
-        # borrar en orden inverso por FK
+        # borrar en orden inverso por FK — incluir outbox (F2-5)
+        try:
+            db.query(OutboxEvent).delete()
+        except Exception:
+            pass
         db.query(AuditEventRow).delete()
         db.query(WorkflowCheckpoint).delete()
         db.query(IdempotencyKey).delete()

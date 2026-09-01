@@ -125,6 +125,18 @@ def _reset_gateway_global():
         reset_lock_manager()
     except Exception:
         pass
+    # F2-5: clear outbox between tests (prevent accumulation)
+    try:
+        from procurement_platform.persistence.database import get_sessionmaker
+        from procurement_platform.persistence.models import OutboxEvent
+
+        SessionLocal = get_sessionmaker()
+        _db = SessionLocal()
+        _db.query(OutboxEvent).delete()
+        _db.commit()
+        _db.close()
+    except Exception:
+        pass
     yield
     try:
         from procurement_platform.infra.locks.manager import reset_lock_manager

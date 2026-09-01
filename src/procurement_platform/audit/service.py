@@ -74,6 +74,23 @@ def create_audit_event(
         details=event.details,
     )
     db.add(row)
+    # F2-5: transactional outbox — same flush, caller commits together
+    try:
+        from procurement_platform.persistence.models import OutboxEvent
+
+        out = OutboxEvent(
+            event_id=new_id("out"),
+            aggregate_id=execution_id,
+            event_type=f"outbox:{event_type}",
+            payload=event.model_dump(mode="json"),
+            created_at=utcnow(),
+            processed_at=None,
+            attempts=0,
+            last_error=None,
+        )
+        db.add(out)
+    except Exception:
+        pass
     # flush but not commit — caller decides
     db.flush()
     return event
