@@ -46,3 +46,6 @@ htmlcov/
 
 # local plan — no publicar
 PLAN_IMPLEMENTACION.md
+PLAN_ELEVACION_11_FASES.md
+PLAN_ELEVACION*.md
+.elevacion/
