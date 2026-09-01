@@ -144,3 +144,63 @@ def redact_dict_values(data: dict, max_depth: int = 3) -> dict:
         else:
             out[k] = v
     return out
+
+
+# F3-6: classification-aware redaction
+CLASSIFICATION_POLICIES: dict[str, set[str]] = {
+    "public": {"ssn", "credit_card"},
+    "internal": {"email", "phone", "ssn", "credit_card", "dni_es", "nie_es"},
+    "restricted": {"email", "phone", "ssn", "credit_card", "ipv4", "dni_es", "nie_es"},
+    "confidential": {"email", "phone", "ssn", "credit_card", "ipv4", "dni_es", "nie_es"},
+}
+
+
+def redact_pii_by_classification(text: str, classification: str = "restricted", mask: str = "[REDACTED]") -> tuple[str, dict]:
+    """Redacta según clasificación de documento.
+    
+    public -> solo ssn/credit_card
+    internal -> email/phone/ssn/credit_card/dni
+    restricted/confidential -> todo
+    """
+    if not text or not isinstance(text, str):
+        return text, {"has_pii": False, "findings": [], "count": 0}
+    allowed = CLASSIFICATION_POLICIES.get(classification, CLASSIFICATION_POLICIES["restricted"])
+    det = detect_pii(text)
+    if not det["has_pii"]:
+        return text, det
+    # filtrar findings por clasificación
+    filtered = [f for f in det["findings"] if f["type"] in allowed]
+    if not filtered:
+        return text, {"has_pii": False, "findings": [], "count": 0}
+    redacted = text
+    for f in sorted(filtered, key=lambda x: x["span"][0], reverse=True):
+        s, e = f["span"]
+        redacted = redacted[:s] + f"{mask}_{f['type'].upper()}" + redacted[e:]
+    return redacted, {"has_pii": True, "findings": filtered, "count": len(filtered)}
+
+
+def redact_dict_by_classification(data: dict, classification: str = "restricted", max_depth: int = 3) -> dict:
+    """Recursivamente redacta por clasificación."""
+    if max_depth < 0 or not isinstance(data, dict):
+        return data
+    out: dict = {}
+    for k, v in data.items():
+        if isinstance(v, str):
+            rv, _ = redact_pii_by_classification(v, classification=classification)
+            out[k] = rv
+        elif isinstance(v, dict):
+            out[k] = redact_dict_by_classification(v, classification=classification, max_depth=max_depth - 1)
+        elif isinstance(v, list):
+            new_list = []
+            for item in v:
+                if isinstance(item, str):
+                    rv, _ = redact_pii_by_classification(item, classification=classification)
+                    new_list.append(rv)
+                elif isinstance(item, dict):
+                    new_list.append(redact_dict_by_classification(item, classification=classification, max_depth=max_depth - 1))
+                else:
+                    new_list.append(item)
+            out[k] = new_list
+        else:
+            out[k] = v
+    return out
