@@ -90,6 +90,24 @@ health:
 	curl -s http://localhost:8000/healthz | python -m json.tool
 	curl -s http://localhost:8000/readyz | python -m json.tool
 
+metrics:
+	curl -s http://localhost:8000/metrics | head -n 50
+
+slo:
+	curl -s http://localhost:8000/slo | python -m json.tool
+
+trace:
+	curl -s "http://localhost:8000/v1/procurement/executions/$$EXEC_ID/events?format=trace" | python -m json.tool | head -n 80
+
+dashboards-up:
+	docker compose --profile observability up -d 2>/dev/null || echo "Grafana/Loki profile not in compose, dashboard JSON at observability/dashboards/procurement.json — import manually"
+	@echo "Grafana dashboard: observability/dashboards/procurement.json"
+	@echo "Alerts: observability/alerts/alerts.yaml"
+
+eval-finops:
+	python -m pytest tests/unit/test_finops.py -v
+	@echo "cost_rates: cat config/cost_rates.yaml"
+
 fake-agent-station:
 	uvicorn procurement_platform.integrations.agent_station.fake_server:app --port 8001 --reload
 
