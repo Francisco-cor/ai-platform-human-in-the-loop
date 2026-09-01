@@ -45,7 +45,9 @@ def test_run_workflow_sync_creates_execution(db_session):
         created_at=utcnow(),
         raw_intent="test worker sync",
     )
-    exec_obj = orch.create_execution(db_session, normalized=norm, trace_id="trace_test", actor_id="user_01")
+    exec_obj = orch.create_execution(
+        db_session, normalized=norm, trace_id="trace_test", actor_id="user_01"
+    )
     exec_id = exec_obj.execution_id
     # run via sync helper (advances until AWAITING)
     from procurement_platform.workers.tasks import run_workflow_sync

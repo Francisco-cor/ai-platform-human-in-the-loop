@@ -31,7 +31,9 @@ async def run_workflow(ctx, execution_id: str, trace_id: str | None = None) -> d
         logger.info("run_workflow done", extra={"execution_id": execution_id, "status": status})
         return {"execution_id": execution_id, "status": status}
     except Exception as e:
-        logger.exception("run_workflow failed", extra={"execution_id": execution_id, "error": str(e)})
+        logger.exception(
+            "run_workflow failed", extra={"execution_id": execution_id, "error": str(e)}
+        )
         raise
     finally:
         try:

@@ -1385,7 +1385,11 @@ class WorkflowOrchestrator:
                             return result
                         except Exception as e:
                             msg = str(e)
-                            if "budget_exceeded" in msg or "not_allowed" in msg or "scope_mismatch" in msg:
+                            if (
+                                "budget_exceeded" in msg
+                                or "not_allowed" in msg
+                                or "scope_mismatch" in msg
+                            ):
                                 raise
                             if attempt == 2:
                                 raise

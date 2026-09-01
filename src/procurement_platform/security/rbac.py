@@ -13,10 +13,7 @@ ROLE_HIERARCHY = {"requester": 1, "approver": 2, "admin": 3}
 
 def has_role(principal: Principal, required: str) -> bool:
     req_level = ROLE_HIERARCHY.get(required, 0)
-    for r in principal.roles:
-        if ROLE_HIERARCHY.get(r, 0) >= req_level:
-            return True
-    return False
+    return any(ROLE_HIERARCHY.get(r, 0) >= req_level for r in principal.roles)
 
 
 def require_role(required: str):
@@ -26,7 +23,10 @@ def require_role(required: str):
         if not has_role(principal, required):
             raise HTTPException(
                 status_code=403,
-                detail={"code": "forbidden", "message": f"role {required} required, has {principal.roles}"},
+                detail={
+                    "code": "forbidden",
+                    "message": f"role {required} required, has {principal.roles}",
+                },
             )
         return principal
 
@@ -36,6 +36,11 @@ def require_role(required: str):
 def require_approver_for_execution(principal: Principal, tenant_id: str) -> None:
     """ABAC: approver must be same tenant and have approver/admin."""
     if principal.tenant_id != tenant_id:
-        raise HTTPException(status_code=403, detail={"code": "tenant_forbidden", "message": "tenant mismatch for approver"})
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "tenant_forbidden", "message": "tenant mismatch for approver"},
+        )
     if not has_role(principal, "approver"):
-        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "approver role required"})
+        raise HTTPException(
+            status_code=403, detail={"code": "forbidden", "message": "approver role required"}
+        )

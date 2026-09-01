@@ -2,7 +2,13 @@
 
 import threading
 
-from procurement_platform.domain.models import ExecutionState, NormalizedRequest, RequestItem, new_id, utcnow
+from procurement_platform.domain.models import (
+    ExecutionState,
+    NormalizedRequest,
+    RequestItem,
+    new_id,
+    utcnow,
+)
 from procurement_platform.workflows.orchestrator import WorkflowOrchestrator
 
 
@@ -21,7 +27,9 @@ def test_restart_midflight_awaiting_no_duplicate(db_session):
         created_at=utcnow(),
         raw_intent="chaos restart awaiting",
     )
-    exec_obj = orch.create_execution(db_session, normalized=norm, trace_id="chaos1", actor_id="user_01")
+    exec_obj = orch.create_execution(
+        db_session, normalized=norm, trace_id="chaos1", actor_id="user_01"
+    )
     exec_id = exec_obj.execution_id
     exec_obj = orch.advance_synthetic(db_session, exec_id, trace_id="chaos1")
     assert exec_obj.status == ExecutionState.AWAITING_APPROVAL
@@ -30,14 +38,20 @@ def test_restart_midflight_awaiting_no_duplicate(db_session):
     resumed = new_orch.resume_durable(db_session, exec_id, trace_id="chaos1-resume")
     assert resumed.status == ExecutionState.AWAITING_APPROVAL
     # approve now
-    exec_obj = new_orch.approve_and_complete(db_session, exec_id, decided_by="approver_01", trace_id="chaos1")
+    exec_obj = new_orch.approve_and_complete(
+        db_session, exec_id, decided_by="approver_01", trace_id="chaos1"
+    )
     assert exec_obj.status == ExecutionState.COMPLETED
     # simulate second resume after completed — idempotent, no duplicate
     resumed2 = new_orch.resume_durable(db_session, exec_id, trace_id="chaos1-resume2")
     assert resumed2.status == ExecutionState.COMPLETED
     from procurement_platform.tools.gateway import _GLOBAL_CALL_LOG
 
-    submits = [c for c in _GLOBAL_CALL_LOG if c["execution_id"] == exec_id and c["tool"] == "submit_purchase_order"]
+    submits = [
+        c
+        for c in _GLOBAL_CALL_LOG
+        if c["execution_id"] == exec_id and c["tool"] == "submit_purchase_order"
+    ]
     assert len(submits) == 1
 
 
@@ -56,13 +70,19 @@ def test_restart_partial_early_state_no_loss(db_session):
         created_at=utcnow(),
         raw_intent="chaos early",
     )
-    exec_obj = orch.create_execution(db_session, normalized=norm, trace_id="chaos2", actor_id="user_01")
+    exec_obj = orch.create_execution(
+        db_session, normalized=norm, trace_id="chaos2", actor_id="user_01"
+    )
     exec_id = exec_obj.execution_id
     # don't call advance_synthetic — stay RECEIVED
     assert exec_obj.status == ExecutionState.RECEIVED
     # resume should advance to AWAITING
     resumed = orch.resume_durable(db_session, exec_id, trace_id="chaos2-resume")
-    assert resumed.status in (ExecutionState.AWAITING_APPROVAL, ExecutionState.BLOCKED, ExecutionState.COMPLETED)
+    assert resumed.status in (
+        ExecutionState.AWAITING_APPROVAL,
+        ExecutionState.BLOCKED,
+        ExecutionState.COMPLETED,
+    )
 
 
 def test_concurrent_resume_only_one_wins(db_session):
@@ -80,7 +100,9 @@ def test_concurrent_resume_only_one_wins(db_session):
         created_at=utcnow(),
         raw_intent="chaos concurrent",
     )
-    exec_obj = orch.create_execution(db_session, normalized=norm, trace_id="chaos3", actor_id="user_01")
+    exec_obj = orch.create_execution(
+        db_session, normalized=norm, trace_id="chaos3", actor_id="user_01"
+    )
     exec_id = exec_obj.execution_id
     # stay at RECEIVED, then concurrent resume attempts
     results = []

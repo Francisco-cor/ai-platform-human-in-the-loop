@@ -7,7 +7,11 @@ def test_events_pagination_stable(client: TestClient):
     # create execution
     resp = client.post(
         "/v1/procurement/executions",
-        json={"tenant_id": "tenant_demo", "requester_id": "user_01", "raw_intent": "test pagination"},
+        json={
+            "tenant_id": "tenant_demo",
+            "requester_id": "user_01",
+            "raw_intent": "test pagination",
+        },
     )
     assert resp.status_code == 202
     exec_id = resp.json()["execution_id"]
@@ -26,7 +30,9 @@ def test_events_pagination_stable(client: TestClient):
     if data1["has_more"]:
         assert data1["next_cursor"] is not None
         # fetch next page with cursor
-        r2 = client.get(f"/v1/procurement/executions/{exec_id}/events?limit=2&cursor={data1['next_cursor']}")
+        r2 = client.get(
+            f"/v1/procurement/executions/{exec_id}/events?limit=2&cursor={data1['next_cursor']}"
+        )
         assert r2.status_code == 200
         data2 = r2.json()
         # events should not overlap (stable)

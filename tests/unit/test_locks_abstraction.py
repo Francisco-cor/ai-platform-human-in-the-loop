@@ -1,6 +1,10 @@
 """Tests for LockManager abstraction — F1-3."""
 
-from procurement_platform.infra.locks.manager import MemoryLockManager, get_lock_manager, reset_lock_manager
+from procurement_platform.infra.locks.manager import (
+    MemoryLockManager,
+    get_lock_manager,
+    reset_lock_manager,
+)
 
 
 def test_memory_lock_manager_acquire_release():
@@ -33,7 +37,10 @@ def test_get_lock_manager_singleton():
 
 def test_orchestrator_lock_via_manager():
     reset_lock_manager()
-    from procurement_platform.workflows.orchestrator import _acquire_execution_lock, _release_execution_lock
+    from procurement_platform.workflows.orchestrator import (
+        _acquire_execution_lock,
+        _release_execution_lock,
+    )
 
     assert _acquire_execution_lock("exec_test_1", blocking=False) is True
     # second should fail non-blocking

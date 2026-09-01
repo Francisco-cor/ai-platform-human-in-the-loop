@@ -11,8 +11,6 @@ from typing import Any
 from sqlalchemy.orm import Query
 from sqlalchemy.sql import Select
 
-from procurement_platform.security.tenant import is_tenant_allowed  # reuse
-
 
 def apply_tenant_filter(query: Query | Select, model: Any, tenant_id: str):
     """Add tenant_id filter to query if model has tenant_id column."""
@@ -21,7 +19,9 @@ def apply_tenant_filter(query: Query | Select, model: Any, tenant_id: str):
     return query
 
 
-def assert_tenant_row_access(row_tenant_id: str, principal_tenant_id: str, allow_cross: bool = False) -> None:
+def assert_tenant_row_access(
+    row_tenant_id: str, principal_tenant_id: str, allow_cross: bool = False
+) -> None:
     """Raise 403 if principal cannot access row tenant."""
     if allow_cross:
         return
@@ -30,7 +30,10 @@ def assert_tenant_row_access(row_tenant_id: str, principal_tenant_id: str, allow
 
         raise HTTPException(
             status_code=403,
-            detail={"code": "tenant_forbidden", "message": f"tenant {principal_tenant_id} cannot access {row_tenant_id}"},
+            detail={
+                "code": "tenant_forbidden",
+                "message": f"tenant {principal_tenant_id} cannot access {row_tenant_id}",
+            },
         )
 
 

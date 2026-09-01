@@ -17,7 +17,9 @@ def _make_jwt(payload: dict) -> str:
 
 def test_anonymous_in_ci(client: TestClient):
     # without auth header, should still create execution (anonymous principal)
-    resp = client.post("/v1/procurement/executions", json={"tenant_id": "tenant_demo", "raw_intent": "hi"})
+    resp = client.post(
+        "/v1/procurement/executions", json={"tenant_id": "tenant_demo", "raw_intent": "hi"}
+    )
     assert resp.status_code == 202
 
 

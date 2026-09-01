@@ -84,7 +84,9 @@ class RedisLockManager:
                 import redis  # type: ignore
 
                 # don't ping yet; will be done lazily
-                self._redis = redis.from_url(redis_url, socket_connect_timeout=0.2, socket_timeout=0.2)
+                self._redis = redis.from_url(
+                    redis_url, socket_connect_timeout=0.2, socket_timeout=0.2
+                )
             except Exception:
                 self._redis = None
 
@@ -98,7 +100,9 @@ class RedisLockManager:
         # non-blocking fast path
         if not blocking:
             try:
-                ok = self._redis.set(rkey, "1", nx=True, px=int(timeout * 1000) if timeout else 2000)
+                ok = self._redis.set(
+                    rkey, "1", nx=True, px=int(timeout * 1000) if timeout else 2000
+                )
                 return bool(ok)
             except Exception:
                 return self._memory_fallback.acquire(key, blocking=False)
@@ -106,7 +110,9 @@ class RedisLockManager:
         deadline = time.time() + timeout if timeout else time.time() + 2.0
         while True:
             try:
-                ok = self._redis.set(rkey, "1", nx=True, px=int(timeout * 1000) if timeout else 2000)
+                ok = self._redis.set(
+                    rkey, "1", nx=True, px=int(timeout * 1000) if timeout else 2000
+                )
                 if ok:
                     return True
             except Exception:

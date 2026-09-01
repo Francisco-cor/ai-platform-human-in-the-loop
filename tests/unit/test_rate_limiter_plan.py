@@ -1,6 +1,11 @@
 """Per-tenant plan limits — F3-5."""
 
-from procurement_platform.security.rate_limiter import RateLimiter, get_rate_limiter, set_tenant_plan, reset_rate_limiter
+from procurement_platform.security.rate_limiter import (
+    RateLimiter,
+    get_rate_limiter,
+    set_tenant_plan,
+    reset_rate_limiter,
+)
 
 
 def test_plan_limits():

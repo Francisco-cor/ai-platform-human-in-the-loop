@@ -155,9 +155,11 @@ CLASSIFICATION_POLICIES: dict[str, set[str]] = {
 }
 
 
-def redact_pii_by_classification(text: str, classification: str = "restricted", mask: str = "[REDACTED]") -> tuple[str, dict]:
+def redact_pii_by_classification(
+    text: str, classification: str = "restricted", mask: str = "[REDACTED]"
+) -> tuple[str, dict]:
     """Redacta según clasificación de documento.
-    
+
     public -> solo ssn/credit_card
     internal -> email/phone/ssn/credit_card/dni
     restricted/confidential -> todo
@@ -179,7 +181,9 @@ def redact_pii_by_classification(text: str, classification: str = "restricted", 
     return redacted, {"has_pii": True, "findings": filtered, "count": len(filtered)}
 
 
-def redact_dict_by_classification(data: dict, classification: str = "restricted", max_depth: int = 3) -> dict:
+def redact_dict_by_classification(
+    data: dict, classification: str = "restricted", max_depth: int = 3
+) -> dict:
     """Recursivamente redacta por clasificación."""
     if max_depth < 0 or not isinstance(data, dict):
         return data
@@ -189,7 +193,9 @@ def redact_dict_by_classification(data: dict, classification: str = "restricted"
             rv, _ = redact_pii_by_classification(v, classification=classification)
             out[k] = rv
         elif isinstance(v, dict):
-            out[k] = redact_dict_by_classification(v, classification=classification, max_depth=max_depth - 1)
+            out[k] = redact_dict_by_classification(
+                v, classification=classification, max_depth=max_depth - 1
+            )
         elif isinstance(v, list):
             new_list = []
             for item in v:
@@ -197,7 +203,11 @@ def redact_dict_by_classification(data: dict, classification: str = "restricted"
                     rv, _ = redact_pii_by_classification(item, classification=classification)
                     new_list.append(rv)
                 elif isinstance(item, dict):
-                    new_list.append(redact_dict_by_classification(item, classification=classification, max_depth=max_depth - 1))
+                    new_list.append(
+                        redact_dict_by_classification(
+                            item, classification=classification, max_depth=max_depth - 1
+                        )
+                    )
                 else:
                     new_list.append(item)
             out[k] = new_list

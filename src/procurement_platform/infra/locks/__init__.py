@@ -8,4 +8,10 @@ from procurement_platform.infra.locks.manager import (
     reset_lock_manager,
 )
 
-__all__ = ["LockManager", "MemoryLockManager", "RedisLockManager", "get_lock_manager", "reset_lock_manager"]
+__all__ = [
+    "LockManager",
+    "MemoryLockManager",
+    "RedisLockManager",
+    "get_lock_manager",
+    "reset_lock_manager",
+]

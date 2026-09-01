@@ -20,10 +20,16 @@ def test_audit_creates_outbox_transactionally(db_session):
     # audit exists
     from procurement_platform.persistence.models import AuditEventRow
 
-    audits = db_session.query(AuditEventRow).filter(AuditEventRow.execution_id == "exec_outbox_test").all()
+    audits = (
+        db_session.query(AuditEventRow)
+        .filter(AuditEventRow.execution_id == "exec_outbox_test")
+        .all()
+    )
     assert len(audits) == 1
     # outbox exists unprocessed
-    outs = db_session.query(OutboxEvent).filter(OutboxEvent.aggregate_id == "exec_outbox_test").all()
+    outs = (
+        db_session.query(OutboxEvent).filter(OutboxEvent.aggregate_id == "exec_outbox_test").all()
+    )
     assert len(outs) == 1
     assert outs[0].processed_at is None
     assert outs[0].payload["event_type"] == "test.event"

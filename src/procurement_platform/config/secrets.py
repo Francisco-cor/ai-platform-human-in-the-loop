@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Dict
 
 
 class SecretProvider:
@@ -16,8 +15,10 @@ class SecretProvider:
 
     def __init__(self, use_gcp: bool = False, project_id: str | None = None) -> None:
         self.use_gcp = use_gcp
-        self.project_id = project_id or os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
-        self._cache: Dict[str, str | None] = {}
+        self.project_id = (
+            project_id or os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
+        )
+        self._cache: dict[str, str | None] = {}
         self._client = None
         if use_gcp:
             try:

@@ -20,7 +20,9 @@ def test_sqlite_engine_has_check_same_thread():
 
 def test_postgres_engine_would_have_pooling(monkeypatch):
     # simulate postgres url without needing real PG — just verify engine creation doesn't error
-    monkeypatch.setenv("PROCUREMENT_DATABASE_URL", "postgresql+psycopg://user:pass@localhost:5432/test")
+    monkeypatch.setenv(
+        "PROCUREMENT_DATABASE_URL", "postgresql+psycopg://user:pass@localhost:5432/test"
+    )
     from procurement_platform.config.settings import reset_settings_cache
 
     reset_settings_cache()

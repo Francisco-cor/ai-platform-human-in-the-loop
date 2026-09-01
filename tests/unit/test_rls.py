@@ -3,7 +3,11 @@
 import pytest
 from sqlalchemy.orm import Session
 
-from procurement_platform.persistence.rls import apply_tenant_filter, assert_tenant_row_access, tenant_scoped_query
+from procurement_platform.persistence.rls import (
+    apply_tenant_filter,
+    assert_tenant_row_access,
+    tenant_scoped_query,
+)
 from procurement_platform.persistence.models import WorkflowExecution
 from procurement_platform.domain.models import new_id, utcnow
 from procurement_platform.domain.models import ExecutionState
