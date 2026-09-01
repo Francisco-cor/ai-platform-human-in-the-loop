@@ -119,8 +119,10 @@ def _get_versions() -> dict[str, Any]:
 
 def clear_db(db: Session) -> None:
     """Limpia tablas relevantes para aislamiento entre casos."""
-    # asegurar tablas existen (para ejecución directa sin pytest)
+    # asegurar tablas existen (para ejecución directa sin pytest) — importar modelos primero
     try:
+        import procurement_platform.persistence.models  # noqa: F401, ensure metadata populated
+
         from procurement_platform.persistence.database import Base, get_engine
 
         engine = get_engine()
@@ -166,6 +168,13 @@ def clear_db(db: Session) -> None:
 
         _GLOBAL_IDEMPOTENCY.clear()
         _GLOBAL_CALL_LOG.clear()
+    except Exception:
+        pass
+    # F3-5: reset rate limiter y planes entre casos (evita acumulación global 20/min)
+    try:
+        from procurement_platform.security.rate_limiter import reset_rate_limiter
+
+        reset_rate_limiter()
     except Exception:
         pass
 
