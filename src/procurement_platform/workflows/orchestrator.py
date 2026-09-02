@@ -816,6 +816,46 @@ class WorkflowOrchestrator:
                         },
                     )
                     db.flush()
+                    # Fase 7 — notification service (email + slack + webhook) con scope_hash truncado y link inbox
+                    try:
+                        from procurement_platform.notifications.service import get_notifier
+
+                        get_notifier().notify_approval_requested(
+                            approval_id=appr.approval_id,
+                            execution_id=row.execution_id,
+                            request_id=row.request_id,
+                            tenant_id=row.tenant_id,
+                            total=appr.total or prop.total,
+                            currency=appr.currency or prop.currency,
+                            risk_level=appr.risk_level or prop.risk_level,
+                            scope_hash=appr.scope_hash,
+                            required_approvals=appr.required_approvals,
+                            trace_id=trace_id,
+                        )
+                        # audit notification.sent
+                        create_audit_event(
+                            db,
+                            execution_id=row.execution_id,
+                            request_id=row.request_id,
+                            event_type="notification.sent",
+                            actor_type="system",
+                            actor_id="notifier",
+                            trace_id=trace_id,
+                            details={
+                                "approval_id": appr.approval_id,
+                                "channels": ["email", "slack", "webhook"],
+                                "scope_hash_trunc": appr.scope_hash[:16],
+                                "link": f"/approvals/{appr.approval_id}",
+                            },
+                        )
+                        db.flush()
+                    except Exception as _n_e:
+                        try:
+                            import structlog
+
+                            structlog.get_logger("orchestrator").warning("notification_failed", error=str(_n_e))
+                        except Exception:
+                            pass
                 self.transition(db, execution_id, target, node=node, trace_id=trace_id)
 
         return self.get_execution(db, execution_id)  # type: ignore

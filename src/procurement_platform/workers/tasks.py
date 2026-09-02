@@ -58,6 +58,27 @@ def run_workflow_sync(execution_id: str, trace_id: str | None = None) -> dict:
             return fut.result()
 
 
+async def check_approval_sla_job(ctx) -> dict:
+    """Fase 7 — job cada 15m (ARQ) — escanea aprobaciones pending >12h y escala."""
+    from procurement_platform.approvals.service import check_approval_sla
+    from procurement_platform.persistence.database import get_sessionmaker
+
+    SessionLocal = get_sessionmaker()
+    db = SessionLocal()
+    try:
+        escalated = check_approval_sla(db, trace_id=None)
+        logger.info("check_approval_sla_job done", extra={"escalated": escalated})
+        return {"escalated": escalated, "count": len(escalated)}
+    except Exception as e:
+        logger.exception("check_approval_sla_job failed", extra={"error": str(e)})
+        raise
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
 def enqueue_workflow(execution_id: str, trace_id: str | None = None) -> bool:
     """Try to enqueue run_workflow via ARQ/Redis; return True if enqueued, False if fallback to sync.
 

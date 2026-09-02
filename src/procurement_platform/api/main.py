@@ -659,6 +659,309 @@ def list_events(
 
 
 # ---------------------------------------------------------------------------
+# Fase 7 — HITL productivo: list, bulk, export, delegation, SLA
+# ---------------------------------------------------------------------------
+@app.get("/v1/approvals", tags=["approvals"])
+def list_approvals(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+    tenant_id: str | None = None,
+    state: str | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
+):
+    """Lista aprobaciones con filtro tenant/state — para inbox UI. Paginación cursor por requested_at."""
+    # tenant filter: if principal authenticated, restrict to tenant
+    effective_tenant = tenant_id or (principal.tenant_id if principal.auth_method != "anonymous" else None)
+    rows = db.query(WorkflowExecution).all()
+    # build list
+    approvals = []
+    for row in rows:
+        appr = row.approval_request
+        if not appr:
+            continue
+        # tenant isolation
+        if effective_tenant and row.tenant_id != effective_tenant:
+            continue
+        if principal.auth_method != "anonymous" and principal.tenant_id != row.tenant_id:
+            continue
+        status = appr.get("status")
+        if state and state != "all" and status != state:
+            continue
+        approvals.append(
+            {
+                "approval_id": appr.get("approval_id"),
+                "execution_id": row.execution_id,
+                "request_id": row.request_id,
+                "tenant_id": row.tenant_id,
+                "status": status,
+                "scope_hash": appr.get("scope_hash"),
+                "total": appr.get("total"),
+                "currency": appr.get("currency"),
+                "risk_level": appr.get("risk_level"),
+                "required_approvals": appr.get("required_approvals", 1),
+                "approvals_received": appr.get("approvals_received", 0),
+                "approvers": appr.get("approvers", []),
+                "requested_by": appr.get("requested_by"),
+                "requested_at": appr.get("requested_at"),
+                "expires_at": appr.get("expires_at"),
+                "escalated_to": appr.get("escalated_to"),
+                "escalated_at": appr.get("escalated_at"),
+                "execution_status": row.status,
+            }
+        )
+    # sort by requested_at desc (newest first)
+    approvals.sort(key=lambda x: x.get("requested_at") or "", reverse=True)
+    # cursor pagination (simplified: cursor is approval_id)
+    if cursor:
+        # find index
+        idx = next((i for i, a in enumerate(approvals) if a["approval_id"] == cursor), None)
+        if idx is not None:
+            approvals = approvals[idx + 1 :]
+    total = len(approvals)
+    has_more = False
+    if len(approvals) > limit:
+        has_more = True
+        approvals = approvals[:limit]
+        next_cursor = approvals[-1]["approval_id"] if approvals else None
+    else:
+        next_cursor = None
+    return {"count": len(approvals), "total": total, "has_more": has_more, "next_cursor": next_cursor, "approvals": approvals}
+
+
+@app.post("/v1/approvals/bulk/decision", tags=["approvals"])
+def bulk_decide(
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Fase 7 bulk — {approval_ids: [], decision, decided_by, reason} — RBAC admin o approver."""
+    approval_ids = payload.get("approval_ids") or payload.get("approvalIds") or []
+    decision = payload.get("decision")
+    decided_by = payload.get("decided_by")
+    reason = payload.get("reason")
+    if not approval_ids or not isinstance(approval_ids, list):
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "approval_ids required"})
+    if decision not in {"approved", "rejected", "needs_changes"}:
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "invalid decision"})
+    if not decided_by:
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "decided_by required"})
+    # RBAC: need admin or approver
+    if principal.auth_method != "anonymous":
+        from procurement_platform.security.rbac import has_role
+
+        if not (has_role(principal, "approver") or has_role(principal, "admin")):
+            raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "approver or admin required"})
+    trace_id = request.state.trace_id
+    results = []
+    for aid in approval_ids:
+        try:
+            # reuse orchestrator logic via service directly to avoid HTTP recursion
+            # find execution
+            rows = db.query(WorkflowExecution).all()
+            target = None
+            for row in rows:
+                appr = row.approval_request
+                if appr and appr.get("approval_id") == aid:
+                    target = row
+                    break
+            if not target:
+                results.append({"approval_id": aid, "status": "error", "error": "not_found"})
+                continue
+            # tenant check
+            if principal.auth_method != "anonymous" and principal.tenant_id != target.tenant_id:
+                results.append({"approval_id": aid, "status": "error", "error": "tenant_forbidden"})
+                continue
+            # delegate to orchestrator
+            try:
+                if decision == "approved":
+                    exec_obj = orchestrator.approve_and_complete(db, target.execution_id, decided_by=decided_by, trace_id=trace_id, decision_reason=reason)
+                    appr_after = exec_obj.approval_request
+                    if appr_after and appr_after.status == ApprovalStatus.pending and appr_after.approvals_received < appr_after.required_approvals:
+                        results.append({"approval_id": aid, "status": "partially_approved", "execution_status": exec_obj.status.value})
+                    else:
+                        results.append({"approval_id": aid, "status": "approved", "execution_status": exec_obj.status.value})
+                elif decision == "rejected":
+                    exec_obj = orchestrator.reject_execution(db, target.execution_id, decided_by=decided_by, trace_id=trace_id, reason=reason)
+                    results.append({"approval_id": aid, "status": "rejected", "execution_status": exec_obj.status.value})
+                else:
+                    exec_obj = orchestrator.request_changes(db, target.execution_id, decided_by=decided_by, trace_id=trace_id, reason=reason)
+                    results.append({"approval_id": aid, "status": "needs_changes", "execution_status": exec_obj.status.value})
+            except ValueError as ve:
+                msg = str(ve)
+                if "expired" in msg:
+                    results.append({"approval_id": aid, "status": "error", "error": "expired", "message": msg})
+                elif "scope_mismatch" in msg:
+                    results.append({"approval_id": aid, "status": "error", "error": "scope_mismatch", "message": msg})
+                elif "already" in msg.lower():
+                    results.append({"approval_id": aid, "status": "error", "error": "already_decided", "message": msg})
+                else:
+                    results.append({"approval_id": aid, "status": "error", "error": "validation", "message": msg})
+        except Exception as e:
+            results.append({"approval_id": aid, "status": "error", "error": str(e)})
+    # audit bulk
+    try:
+        create_audit_event(
+            db,
+            execution_id="bulk",
+            request_id=request.state.request_id,
+            event_type="approval.bulk_decided",
+            actor_type="human" if principal.auth_method != "anonymous" else "system",
+            actor_id=decided_by,
+            trace_id=trace_id,
+            details={"decision": decision, "count": len(approval_ids), "results": results},
+        )
+        db.commit()
+    except Exception:
+        pass
+    return {"decision": decision, "decided_by": decided_by, "count": len(approval_ids), "results": results}
+
+
+@app.get("/v1/approvals/export", tags=["approvals"])
+def export_approvals(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+    tenant_id: str | None = None,
+    state: str | None = None,
+    format: str = "csv",
+):
+    """Fase 7 CSV export — ?tenant=&state= — RBAC admin."""
+    # For export, require admin if principal authenticated, else allow anonymous for local demo
+    if principal.auth_method != "anonymous":
+        from procurement_platform.security.rbac import has_role
+
+        if not has_role(principal, "admin"):
+            # also allow approver to export own tenant
+            if not has_role(principal, "approver"):
+                raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "admin required for export"})
+        effective_tenant = tenant_id or principal.tenant_id
+    else:
+        effective_tenant = tenant_id
+
+    rows = db.query(WorkflowExecution).all()
+    filtered = []
+    for row in rows:
+        appr = row.approval_request
+        if not appr:
+            continue
+        if effective_tenant and row.tenant_id != effective_tenant:
+            continue
+        if state and state != "all" and appr.get("status") != state:
+            continue
+        filtered.append((row, appr))
+
+    if format == "csv":
+        from fastapi.responses import PlainTextResponse
+        import csv
+        import io
+
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(["approval_id", "execution_id", "request_id", "tenant_id", "status", "total", "currency", "risk_level", "required_approvals", "approvals_received", "requested_at", "expires_at", "escalated_to", "execution_status"])
+        for row, appr in filtered:
+            writer.writerow(
+                [
+                    appr.get("approval_id"),
+                    row.execution_id,
+                    row.request_id,
+                    row.tenant_id,
+                    appr.get("status"),
+                    appr.get("total"),
+                    appr.get("currency"),
+                    appr.get("risk_level"),
+                    appr.get("required_approvals"),
+                    appr.get("approvals_received"),
+                    appr.get("requested_at"),
+                    appr.get("expires_at"),
+                    appr.get("escalated_to", ""),
+                    row.status,
+                ]
+            )
+        return PlainTextResponse(out.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=approvals.csv"})
+    else:
+        return {"count": len(filtered), "approvals": [appr for _, appr in filtered]}
+
+
+@app.post("/v1/approvals/delegation", tags=["approvals"])
+def set_delegation_endpoint(
+    payload: dict,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Fase 7 delegation — {tenant_id, from_user, to_user}."""
+    tenant_id = payload.get("tenant_id") or (principal.tenant_id if principal.auth_method != "anonymous" else "tenant_demo")
+    from_user = payload.get("from_user") or payload.get("from")
+    to_user = payload.get("to_user") or payload.get("to")
+    if not from_user or not to_user:
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "from_user and to_user required"})
+    # RBAC: only admin or from_user themselves can delegate
+    if principal.auth_method != "anonymous":
+        from procurement_platform.security.rbac import has_role
+
+        if principal.sub != from_user and not has_role(principal, "admin"):
+            raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "only admin or delegator can set delegation"})
+        if principal.tenant_id != tenant_id:
+            raise HTTPException(status_code=403, detail={"code": "tenant_forbidden", "message": "tenant mismatch"})
+    from procurement_platform.approvals.service import set_delegation
+
+    set_delegation(tenant_id, from_user, to_user)
+    try:
+        create_audit_event(
+            db,
+            execution_id="no_exec",
+            request_id=new_id("req"),
+            event_type="approval.delegation_set",
+            actor_type="human" if principal.auth_method != "anonymous" else "system",
+            actor_id=principal.sub if principal.auth_method != "anonymous" else from_user,
+            details={"tenant_id": tenant_id, "from": from_user, "to": to_user},
+        )
+        db.commit()
+    except Exception:
+        pass
+    return {"tenant_id": tenant_id, "from": from_user, "to": to_user, "status": "delegated"}
+
+
+@app.get("/v1/approvals/delegation", tags=["approvals"])
+def get_delegation_endpoint(
+    tenant_id: str = "tenant_demo",
+    from_user: str | None = None,
+    principal: Principal = Depends(get_current_principal),
+):
+    from procurement_platform.approvals.service import get_delegation, _delegation_store
+
+    if from_user:
+        delegate = get_delegation(tenant_id, from_user)
+        return {"tenant_id": tenant_id, "from": from_user, "to": delegate}
+    # list all for tenant
+    with __import__("procurement_platform.approvals.service", fromlist=["_delegation_store"])._delegation_lock:
+        result = {f"{k[0]}:{k[1]}": v for k, v in _delegation_store.items() if k[0] == tenant_id}
+    return {"tenant_id": tenant_id, "delegations": result}
+
+
+@app.post("/v1/approvals/sla/check", tags=["approvals"])
+def trigger_sla_check(
+    payload: dict | None = None,
+    request: Request = None,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Fase 7 — trigger SLA check manualmente (job cada 15m via ARQ)."""
+    # RBAC: admin or system
+    if principal and principal.auth_method != "anonymous":
+        from procurement_platform.security.rbac import has_role
+
+        if not (has_role(principal, "admin") or has_role(principal, "approver")):
+            raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "admin required"})
+    from procurement_platform.approvals.service import check_approval_sla
+
+    trace_id = request.state.trace_id if request else None
+    escalated = check_approval_sla(db, trace_id=trace_id)
+    return {"escalated_count": len(escalated), "escalated_ids": escalated, "checked_at": utcnow().isoformat()}
+
+
+
+# ---------------------------------------------------------------------------
 # Approvals — Fase 5 con snapshot inmutable, expiración, scope_hash y doble aprobación
 # ---------------------------------------------------------------------------
 @app.get("/v1/approvals/{approval_id}", tags=["approvals"])

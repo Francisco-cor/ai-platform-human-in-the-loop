@@ -190,6 +190,19 @@ def _reset_gateway_global():
         pass
     except Exception:
         pass
+    # Fase 7: reset notifier, delegations, SLA
+    try:
+        from procurement_platform.notifications.service import reset_notifier
+
+        reset_notifier()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.approvals.service import clear_delegations
+
+        clear_delegations()
+    except Exception:
+        pass
     yield
     try:
         from procurement_platform.infra.locks.manager import reset_lock_manager
@@ -207,6 +220,18 @@ def _reset_gateway_global():
         from procurement_platform.agents.prompts import reset_prompt_cache
 
         reset_prompt_cache()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.notifications.service import reset_notifier
+
+        reset_notifier()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.approvals.service import clear_delegations
+
+        clear_delegations()
     except Exception:
         pass
 

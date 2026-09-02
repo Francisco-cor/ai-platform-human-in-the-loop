@@ -128,6 +128,47 @@ cache-stats:
 tenant-budget-test:
 	python -m pytest tests/unit/test_tenant_llm_budget.py -v 2>/dev/null || echo "tenant budget test not found — run pytest -k tenant"
 
+ui-install:
+	cd ui && npm install
+
+ui-dev:
+	cd ui && npm run dev
+
+ui-build:
+	cd ui && npm run build
+
+ui-test:
+	cd ui && npm run test:e2e || echo "playwright not installed, run: cd ui && npx playwright install"
+
+ui-lint:
+	cd ui && npm run lint 2>/dev/null || echo "ui lint skip"
+
+demo:
+	@echo "Fase 7 demo — happy vs malicious via UI"
+	@echo "1. docker compose up --build -d (API+UI)"
+	@echo "2. curl POST /v1/procurement/executions -> approval inbox <2min"
+	@echo "3. Playwright: cd ui && npx playwright test tests/approval.spec.ts"
+	@echo "See docs/demos/demo_script.md for full playbook"
+
+smoke-staging:
+	@echo "smoke-staging: create execution + approve via API"
+	@python -c "import httpx, json; c=httpx.Client(base_url='http://localhost:8000', timeout=10); r=c.post('/v1/procurement/executions', json={'tenant_id':'tenant_demo','requester_id':'user_01','items':[{'sku':'MAT-001','quantity':10,'unit':'piece'}]}); print(r.status_code, r.text[:300]); d=r.json(); aid=d['approval_request']['approval_id']; r2=c.post(f\"/v1/approvals/{aid}/decision\", json={'decision':'approved','decided_by':'smoke_tester'}); print('decide', r2.status_code, r2.text[:300])" || echo "smoke-staging requires API at localhost:8000"
+
+demo-script:
+	cat docs/demos/demo_script.md
+
+notifications-test:
+	python -m pytest tests/unit/test_notifications.py tests/unit/test_approval_sla.py -v
+
+bulk-test:
+	python -m pytest tests/unit/test_bulk_approvals.py -v
+
+sla-check:
+	curl -s -X POST http://localhost:8000/v1/approvals/sla/check -H "Content-Type: application/json" -d '{}' | python -m json.tool
+
+export-csv:
+	curl -s "http://localhost:8000/v1/approvals/export?tenant=tenant_demo&state=pending" | head -n 20
+
 fake-agent-station:
 	uvicorn procurement_platform.integrations.agent_station.fake_server:app --port 8001 --reload
 

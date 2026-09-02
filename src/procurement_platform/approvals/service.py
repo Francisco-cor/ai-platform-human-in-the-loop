@@ -204,6 +204,136 @@ def validate_scope_or_raise(proposal: Proposal, appr: ApprovalRequest) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Fase 7 — SLA, escalation y delegation
+# ---------------------------------------------------------------------------
+# In-memory delegation store: (tenant_id, from_user) -> to_user
+_delegation_store: dict[tuple[str, str], str] = {}
+_delegation_lock = threading.Lock()
+
+# SLA config
+SLA_ESCALATION_AFTER_HOURS = 12
+SLA_AUTO_ESCALATE_TO = "manager_01"
+SLA_CHECK_INTERVAL_MINUTES = 15
+
+
+def set_delegation(tenant_id: str, from_user: str, to_user: str) -> None:
+    with _delegation_lock:
+        _delegation_store[(tenant_id, from_user)] = to_user
+
+
+def get_delegation(tenant_id: str, from_user: str) -> str | None:
+    with _delegation_lock:
+        return _delegation_store.get((tenant_id, from_user))
+
+
+def clear_delegations(tenant_id: str | None = None) -> None:
+    with _delegation_lock:
+        if tenant_id is None:
+            _delegation_store.clear()
+        else:
+            for k in list(_delegation_store.keys()):
+                if k[0] == tenant_id:
+                    del _delegation_store[k]
+
+
+def resolve_delegate(tenant_id: str, user: str) -> str:
+    """Si user tiene delegación, retorna delegate; sino retorna user."""
+    with _delegation_lock:
+        return _delegation_store.get((tenant_id, user), user)
+
+
+def get_sla_age_hours(appr: ApprovalRequest, now: datetime | None = None) -> float:
+    now = now or utcnow()
+    requested = appr.requested_at
+    if requested.tzinfo is None:
+        requested = requested.replace(tzinfo=UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    delta = now - requested
+    return round(delta.total_seconds() / 3600, 2)
+
+
+def check_approval_sla(db: Session, now: datetime | None = None, trace_id: str | None = None) -> list[str]:
+    """Job cada 15m (ARQ) — escanea aprobaciones pending >12h y escala a manager_01.
+
+    Retorna lista de approval_ids escalados. Crea audit `approval.escalated`.
+    """
+    now = now or utcnow()
+    escalated: list[str] = []
+    rows = db.query(WorkflowExecution).all()
+    for row in rows:
+        if not row.approval_request:
+            continue
+        appr_dict = row.approval_request
+        # only pending
+        if appr_dict.get("status") != ApprovalStatus.pending.value:
+            continue
+        # skip already escalated
+        if appr_dict.get("escalated_to"):
+            continue
+        try:
+            appr = ApprovalRequest.model_validate(appr_dict)
+        except Exception:
+            continue
+        age = get_sla_age_hours(appr, now)
+        if age >= SLA_ESCALATION_AFTER_HOURS:
+            # escalate
+            escalated_to = SLA_AUTO_ESCALATE_TO
+            # also check delegation for escalated user? For now fixed manager
+            appr_dict["escalated_to"] = escalated_to
+            appr_dict["escalated_at"] = now.isoformat()
+            appr_dict["sla_age_hours"] = age
+            row.approval_request = appr_dict
+            # also update via flag_modified for JSON
+            try:
+                from sqlalchemy.orm.attributes import flag_modified
+
+                flag_modified(row, "approval_request")
+            except Exception:
+                pass
+            db.flush()
+            create_audit_event(
+                db,
+                execution_id=row.execution_id,
+                request_id=row.request_id,
+                event_type="approval.escalated",
+                actor_type="system",
+                actor_id="sla_checker",
+                trace_id=trace_id,
+                details={
+                    "approval_id": appr.approval_id,
+                    "from": appr.requested_by,
+                    "escalated_to": escalated_to,
+                    "age_hours": age,
+                    "scope_hash": appr.scope_hash,
+                },
+            )
+            db.flush()
+            # notify escalated user (best effort)
+            try:
+                from procurement_platform.notifications.service import get_notifier
+
+                get_notifier().notify_approval_requested(
+                    approval_id=appr.approval_id,
+                    execution_id=row.execution_id,
+                    request_id=row.request_id,
+                    tenant_id=row.tenant_id,
+                    total=appr.total or 0,
+                    currency=appr.currency or "USD",
+                    risk_level=appr.risk_level or "low",
+                    scope_hash=appr.scope_hash,
+                    required_approvals=appr.required_approvals,
+                    trace_id=trace_id,
+                )
+            except Exception:
+                pass
+            escalated.append(appr.approval_id)
+    if escalated:
+        db.commit()
+    return escalated
+
+
 def decide_approval(
     db: Session,
     approval_id: str,
@@ -279,6 +409,21 @@ def decide_approval(
         if decision == "approved":
             validate_scope_or_raise(proposal, appr)
 
+        # Fase 7 — resolve delegation / escalation (for audit)
+        delegated_from = None
+        try:
+            tenant_id = row.tenant_id
+            with _delegation_lock:
+                for (t, from_u), to_u in list(_delegation_store.items()):
+                    if t == tenant_id and to_u == decided_by:
+                        delegated_from = from_u
+                        break
+            # also if escalated, mark
+            if not delegated_from and appr.escalated_to and decided_by == appr.escalated_to:
+                delegated_from = f"escalated:{appr.requested_by}"
+        except Exception:
+            delegated_from = None
+
         # handle decision
         now = utcnow()
         if decision == "approved":
@@ -296,6 +441,8 @@ def decide_approval(
             appr.decided_by = decided_by  # último aprobador
             appr.decision_reason = reason or "approved"
             appr.decided_at = now
+            if delegated_from:
+                appr.delegated_from = delegated_from
 
             if appr.approvals_received < required:
                 # aún falta otra aprobación → mantener pending, pero audit parcial
@@ -352,6 +499,8 @@ def decide_approval(
             appr.decided_at = now
             appr.approvers.append(decided_by)
             appr.approvals_received = len(appr.approvers)
+            if delegated_from:
+                appr.delegated_from = delegated_from
             row.approval_request = appr.model_dump(mode="json")
             db.flush()
             create_audit_event(
@@ -376,6 +525,8 @@ def decide_approval(
             appr.decided_by = decided_by
             appr.decision_reason = reason or "needs_changes"
             appr.decided_at = now
+            if delegated_from:
+                appr.delegated_from = delegated_from
             row.approval_request = appr.model_dump(mode="json")
             db.flush()
             create_audit_event(

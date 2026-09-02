@@ -29,10 +29,18 @@ try:
     ARQ_REDIS_SETTINGS = get_arq_redis_settings()
 
     # Functions to be registered as ARQ tasks
-    from procurement_platform.workers.tasks import run_workflow
+    from procurement_platform.workers.tasks import check_approval_sla_job, run_workflow
+
+    try:
+        from arq import cron
+
+        _cron_jobs = [cron(check_approval_sla_job, minute={0, 15, 30, 45}, run_at_startup=False)]  # cada 15m
+    except Exception:
+        _cron_jobs = []
 
     class WorkerSettings:
-        functions = [run_workflow]
+        functions = [run_workflow, check_approval_sla_job]
+        cron_jobs = _cron_jobs
         redis_settings = ARQ_REDIS_SETTINGS
         max_jobs = 10
         job_timeout = 60  # seconds per workflow advance

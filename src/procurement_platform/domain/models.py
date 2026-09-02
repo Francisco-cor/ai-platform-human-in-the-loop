@@ -254,6 +254,11 @@ class ApprovalRequest(BaseModel):
     )
     approvals_received: int = Field(default=0, ge=0)
     approvers: list[str] = Field(default_factory=list)
+    # Fase 7 — SLA escalation & delegation
+    escalated_to: str | None = Field(default=None, description="Usuario a quien se escaló tras 12h")
+    escalated_at: datetime | None = Field(default=None)
+    sla_age_hours: float | None = Field(default=None, description="Horas desde requested_at")
+    delegated_from: str | None = Field(default=None, description="Si aprobación fue delegada")
 
     def is_expired(self, now: datetime | None = None) -> bool:
         now = now or utcnow()
