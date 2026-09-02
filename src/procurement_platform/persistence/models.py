@@ -265,3 +265,20 @@ class OutboxEvent(Base):
     last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     __table_args__ = (Index("ix_outbox_unprocessed", "processed_at", "created_at"),)
+
+
+class WebhookSubscriptionRow(Base):
+    """Fase 8 — webhook subscriptions (svix-style)."""
+
+    __tablename__ = "webhook_subscriptions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(String(512), nullable=False)
+    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    events: Mapped[list] = mapped_column(JSON, nullable=False)  # ["execution.completed", "approval.requested"]
+    active: Mapped[bool] = mapped_column(nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (Index("ix_webhook_tenant_active", "tenant_id", "active"),)

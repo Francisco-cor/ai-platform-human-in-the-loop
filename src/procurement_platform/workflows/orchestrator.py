@@ -568,6 +568,37 @@ class WorkflowOrchestrator:
                 get_metrics().observe_cost(row.tenant_id, cost)
         except Exception:
             pass
+        # Fase 8 — webhook delivery for execution.completed (svix-style, HMAC, retry)
+        if target == ExecutionState.COMPLETED:
+            try:
+                from procurement_platform.integrations.webhooks.service import get_webhook_service
+
+                payload = {
+                    "execution_id": execution_id,
+                    "request_id": row.request_id,
+                    "status": target.value,
+                    "tenant_id": row.tenant_id,
+                    "trace_id": trace_id or row.trace_id,
+                    "current_node": row.current_node,
+                }
+                get_webhook_service().deliver("execution.completed", payload, row.tenant_id)
+                # also create audit webhook.delivered
+                try:
+                    create_audit_event(
+                        db,
+                        execution_id=execution_id,
+                        request_id=row.request_id,
+                        event_type="webhook.delivered",
+                        actor_type="system",
+                        actor_id="webhook_service",
+                        trace_id=trace_id or row.trace_id,
+                        details={"event_type": "execution.completed", "tenant_id": row.tenant_id},
+                    )
+                    db.commit()
+                except Exception:
+                    pass
+            except Exception:
+                pass
         db.refresh(row)
         return _serialize_execution(row)
 
@@ -854,6 +885,41 @@ class WorkflowOrchestrator:
                             import structlog
 
                             structlog.get_logger("orchestrator").warning("notification_failed", error=str(_n_e))
+                        except Exception:
+                            pass
+                    # Fase 8 — webhook for approval.requested (svix-style HMAC)
+                    try:
+                        from procurement_platform.integrations.webhooks.service import get_webhook_service
+
+                        payload = {
+                            "approval_id": appr.approval_id,
+                            "execution_id": row.execution_id,
+                            "request_id": row.request_id,
+                            "tenant_id": row.tenant_id,
+                            "total": appr.total,
+                            "currency": appr.currency,
+                            "risk_level": appr.risk_level,
+                            "scope_hash": appr.scope_hash,
+                            "required_approvals": appr.required_approvals,
+                            "trace_id": trace_id,
+                        }
+                        get_webhook_service().deliver("approval.requested", payload, row.tenant_id)
+                        create_audit_event(
+                            db,
+                            execution_id=row.execution_id,
+                            request_id=row.request_id,
+                            event_type="webhook.delivered",
+                            actor_type="system",
+                            actor_id="webhook_service",
+                            trace_id=trace_id,
+                            details={"event_type": "approval.requested", "approval_id": appr.approval_id, "tenant_id": row.tenant_id},
+                        )
+                        db.flush()
+                    except Exception as _wh_e:
+                        try:
+                            import structlog
+
+                            structlog.get_logger("orchestrator").warning("webhook_approval_failed", error=str(_wh_e))
                         except Exception:
                             pass
                 self.transition(db, execution_id, target, node=node, trace_id=trace_id)

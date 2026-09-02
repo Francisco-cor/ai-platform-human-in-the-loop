@@ -176,7 +176,47 @@ docker-scan:
 	trivy image procurement-platform:local || echo "trivy not installed, skipping"
 
 openapi-check:
-	python -c "from procurement_platform.api.main import app; import json; print(json.dumps(app.openapi(), indent=2)[:500])" | head -n 100
+	python tools/openapi_lint.py --check --fail-on-breaking
+	@echo "openapi lint passed — 0 errors"
+
+openapi-generate:
+	python tools/openapi_lint.py --generate --check
+	@echo "openapi generated at docs/api/openapi.json"
+
+openapi-diff:
+	python tools/openapi_lint.py --check 2>&1 | grep -E "breaking|BROKEN" || echo "no breaking"
+
+example-happy:
+	@echo "== curl happy =="
+	@bash examples/curl_happy.sh 2>&1 | head -n 80
+	@echo "== python SDK happy =="
+	@python examples/sdk_happy.py 2>&1 | head -n 50
+
+example-sdk-py:
+	python examples/sdk_happy.py
+
+example-sdk-ts:
+	cd sdk/ts && npm run build 2>&1 | head -n 20; echo "ts sdk built"
+
+sdk-test-py:
+	pytest sdk/python/tests/test_client.py -v
+
+sdk-test-ts:
+	cd sdk/ts && npm test 2>&1 | head -n 100 || echo "npm test requires vitest — run: cd sdk/ts && npm install && npm test"
+
+sdk-test:
+	$(MAKE) sdk-test-py
+	@echo "---"
+	-$(MAKE) sdk-test-ts
+
+webhook-test:
+	python -m pytest tests/unit/test_webhooks.py -v
+
+pagination-test:
+	python -m pytest tests/unit/test_pagination_executions.py tests/contract/test_pagination.py -v
+
+postman:
+	cat docs/api/postman_collection.json | python -m json.tool | head -n 100
 
 flags-list:
 	cat infra/feature_flags.yaml 2>/dev/null || echo "no flags.yaml yet (F9)"

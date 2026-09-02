@@ -513,6 +513,81 @@ def create_execution(
     return JSONResponse(status_code=202, content=resp_body)
 
 
+@app.get("/v1/procurement/executions", tags=["procurement"])
+def list_executions(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+    tenant_id: str | None = None,
+    tenant: str | None = None,
+    state: str | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
+):
+    """Fase 8 — lista paginada estable: total_count, page_size, has_more, orden created_at asc, execution_id asc."""
+    effective_tenant = tenant_id or tenant or (principal.tenant_id if principal.auth_method != "anonymous" else None)
+    # clamp limit 1..100
+    limit = max(1, min(limit, 100))
+    base_q = db.query(WorkflowExecution)
+    if effective_tenant:
+        base_q = base_q.filter(WorkflowExecution.tenant_id == effective_tenant)
+    if state and state != "all":
+        base_q = base_q.filter(WorkflowExecution.status == state)
+    # stable order: created_at asc, execution_id asc
+    base_q = base_q.order_by(WorkflowExecution.created_at.asc(), WorkflowExecution.execution_id.asc())
+    total_count = base_q.count()
+    # cursor: execution_id
+    if cursor:
+        cur_row = db.get(WorkflowExecution, cursor)
+        if cur_row:
+            # filter where (created_at > cur_created) or (created_at == cur_created and execution_id > cursor)
+            base_q = base_q.filter(
+                (WorkflowExecution.created_at > cur_row.created_at)
+                | ((WorkflowExecution.created_at == cur_row.created_at) & (WorkflowExecution.execution_id > cur_row.execution_id))
+            )
+            total_count = base_q.count() + 1  # approximate? Instead keep original total
+            # Actually total_count should be total without cursor; keep original
+            # Recompute total without cursor filter for header
+            total_q = db.query(WorkflowExecution)
+            if effective_tenant:
+                total_q = total_q.filter(WorkflowExecution.tenant_id == effective_tenant)
+            if state and state != "all":
+                total_q = total_q.filter(WorkflowExecution.status == state)
+            total_count = total_q.count()
+    rows = base_q.limit(limit + 1).all()  # fetch one extra to detect has_more
+    has_more = len(rows) > limit
+    if has_more:
+        rows = rows[:limit]
+        next_cursor = rows[-1].execution_id if rows else None
+    else:
+        next_cursor = None
+    executions = [
+        {
+            "execution_id": r.execution_id,
+            "request_id": r.request_id,
+            "tenant_id": r.tenant_id,
+            "status": r.status,
+            "current_node": r.current_node,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "trace_id": r.trace_id,
+        }
+        for r in rows
+    ]
+    return {
+        "count": len(executions),
+        "total_count": total_count,
+        "page_size": limit,
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+        "executions": executions,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Approvals — Fase 5# ---------------------------------------------------------------------------
+# Approvals — Fase 5 con snapshot inmutable, expiración, scope_hash y doble aprobación
+# ---------------------------------------------------------------------------
+
 @app.get("/v1/procurement/executions/{execution_id}", tags=["procurement"])
 def get_execution(execution_id: str, db: Session = Depends(get_db)):
     # Fase 5: auto-expirar si corresponde al consultar (reanudación durable)
@@ -666,13 +741,14 @@ def list_approvals(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
     tenant_id: str | None = None,
+    tenant: str | None = None,
     state: str | None = None,
     limit: int = 50,
     cursor: str | None = None,
 ):
     """Lista aprobaciones con filtro tenant/state — para inbox UI. Paginación cursor por requested_at."""
-    # tenant filter: if principal authenticated, restrict to tenant
-    effective_tenant = tenant_id or (principal.tenant_id if principal.auth_method != "anonymous" else None)
+    # tenant filter: if principal authenticated, restrict to tenant (support alias tenant)
+    effective_tenant = tenant_id or tenant or (principal.tenant_id if principal.auth_method != "anonymous" else None)
     rows = db.query(WorkflowExecution).all()
     # build list
     approvals = []
@@ -823,10 +899,12 @@ def export_approvals(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
     tenant_id: str | None = None,
+    tenant: str | None = None,
     state: str | None = None,
     format: str = "csv",
 ):
     """Fase 7 CSV export — ?tenant=&state= — RBAC admin."""
+    effective_tenant_param = tenant_id or tenant
     # For export, require admin if principal authenticated, else allow anonymous for local demo
     if principal.auth_method != "anonymous":
         from procurement_platform.security.rbac import has_role
@@ -835,9 +913,9 @@ def export_approvals(
             # also allow approver to export own tenant
             if not has_role(principal, "approver"):
                 raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "admin required for export"})
-        effective_tenant = tenant_id or principal.tenant_id
+        effective_tenant = effective_tenant_param or principal.tenant_id
     else:
-        effective_tenant = tenant_id
+        effective_tenant = effective_tenant_param
 
     rows = db.query(WorkflowExecution).all()
     filtered = []
@@ -962,8 +1040,113 @@ def trigger_sla_check(
 
 
 # ---------------------------------------------------------------------------
-# Approvals — Fase 5 con snapshot inmutable, expiración, scope_hash y doble aprobación
+# Fase 8 — Webhooks (svix-style) + Pagination stable
 # ---------------------------------------------------------------------------
+@app.post("/v1/webhooks/subscriptions", tags=["webhooks"])
+def create_webhook_subscription(
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Crea webhook subscription — {url, secret, events} — HMAC sha256, retry, X-Webhook-Id."""
+    tenant_id = payload.get("tenant_id") or (principal.tenant_id if principal.auth_method != "anonymous" else "tenant_demo")
+    url = payload.get("url")
+    secret = payload.get("secret")
+    events = payload.get("events") or ["execution.completed", "approval.requested"]
+    if not url:
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "url required"})
+    if principal.auth_method != "anonymous" and principal.tenant_id != tenant_id:
+        raise HTTPException(status_code=403, detail={"code": "tenant_forbidden", "message": "tenant mismatch"})
+    # validate events
+    allowed = {"execution.completed", "approval.requested", "execution.created", "approval.escalated", "*"}
+    for ev in events:
+        if ev not in allowed:
+            raise HTTPException(status_code=400, detail={"code": "validation_error", "message": f"event {ev} not allowed"})
+    from procurement_platform.integrations.webhooks.service import get_webhook_service
+    sub = get_webhook_service().create_subscription(tenant_id, url, secret, events)
+    # hide secret in response? return with masked
+    try:
+        create_audit_event(
+            db,
+            execution_id="no_exec",
+            request_id=request.state.request_id,
+            event_type="webhook.subscription_created",
+            actor_type="human" if principal.auth_method != "anonymous" else "system",
+            actor_id=principal.sub if principal.auth_method != "anonymous" else "system",
+            trace_id=request.state.trace_id,
+            details={"subscription_id": sub["id"], "url": url, "events": events, "tenant_id": tenant_id},
+        )
+        db.commit()
+    except Exception:
+        pass
+    return sub
+
+
+@app.get("/v1/webhooks/subscriptions", tags=["webhooks"])
+def list_webhook_subscriptions(
+    tenant_id: str | None = None,
+    tenant: str | None = None,
+    principal: Principal = Depends(get_current_principal),
+):
+    effective_tenant = tenant_id or tenant or (principal.tenant_id if principal.auth_method != "anonymous" else None)
+    from procurement_platform.integrations.webhooks.service import get_webhook_service
+    subs = get_webhook_service().list_subscriptions(effective_tenant)
+    return {"count": len(subs), "subscriptions": subs}
+
+
+@app.delete("/v1/webhooks/subscriptions/{sub_id}", tags=["webhooks"])
+def delete_webhook_subscription(
+    sub_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+    tenant_id: str | None = None,
+):
+    effective_tenant = tenant_id or (principal.tenant_id if principal.auth_method != "anonymous" else "tenant_demo")
+    # tenant from subscription must match
+    from procurement_platform.integrations.webhooks.service import get_webhook_service
+    ok = get_webhook_service().delete_subscription(sub_id, effective_tenant)
+    if not ok:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "subscription not found"})
+    try:
+        create_audit_event(
+            db,
+            execution_id="no_exec",
+            request_id=request.state.request_id,
+            event_type="webhook.subscription_deleted",
+            actor_type="human" if principal.auth_method != "anonymous" else "system",
+            actor_id=principal.sub if principal.auth_method != "anonymous" else "system",
+            trace_id=request.state.trace_id,
+            details={"subscription_id": sub_id, "tenant_id": effective_tenant},
+        )
+        db.commit()
+    except Exception:
+        pass
+    return {"status": "deleted", "id": sub_id}
+
+
+@app.post("/v1/webhooks/test", tags=["webhooks"])
+def test_webhook(
+    payload: dict,
+    request: Request,
+    principal: Principal = Depends(get_current_principal),
+):
+    """Test delivery to a webhook subscription — sends test payload and verifies HMAC."""
+    tenant_id = payload.get("tenant_id") or (principal.tenant_id if principal.auth_method != "anonymous" else "tenant_demo")
+    url = payload.get("url")
+    if not url:
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "url required"})
+    secret = payload.get("secret") or "test_secret"
+    event_type = payload.get("event_type") or "execution.completed"
+    test_payload = {"test": True, "tenant_id": tenant_id, "execution_id": "exec_test", "timestamp": utcnow().isoformat()}
+    from procurement_platform.integrations.webhooks.service import get_webhook_service
+    # create temp sub and deliver
+    sub = {"id": "wh_test", "tenant_id": tenant_id, "url": url, "secret": secret, "events": [event_type]}
+    result = get_webhook_service()._deliver_to_subscription(sub, event_type, test_payload, max_retries=1)
+    return {"delivered": result["success"], "result": result}
+
+
 @app.get("/v1/approvals/{approval_id}", tags=["approvals"])
 def get_approval(
     approval_id: str,

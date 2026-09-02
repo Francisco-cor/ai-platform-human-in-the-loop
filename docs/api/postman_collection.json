@@ -1,0 +1,86 @@
+{
+  "info": {
+    "name": "Procurement Platform — Fase 8",
+    "description": "Enterprise Agentic AI Platform — Procurement / HITL — collection for Postman / Insomnia",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/healthz", "host": ["{{baseUrl}}"], "path": ["healthz"] } }
+    },
+    {
+      "name": "Create execution",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "postman_{{$timestamp}}" }],
+        "body": { "mode": "raw", "raw": "{\"tenant_id\":\"tenant_demo\",\"requester_id\":\"user_01\",\"items\":[{\"sku\":\"MAT-001\",\"quantity\":10,\"unit\":\"piece\"}]}" },
+        "url": { "raw": "{{baseUrl}}/v1/procurement/executions", "host": ["{{baseUrl}}"], "path": ["v1","procurement","executions"] }
+      }
+    },
+    {
+      "name": "Get execution",
+      "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/v1/procurement/executions/{{execution_id}}", "host": ["{{baseUrl}}"], "path": ["v1","procurement","executions","{{execution_id}}"] } }
+    },
+    {
+      "name": "List executions (paginated)",
+      "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/v1/procurement/executions?tenant=tenant_demo&limit=2&state=all", "host": ["{{baseUrl}}"], "path": ["v1","procurement","executions"], "query": [{ "key": "tenant", "value": "tenant_demo" }, { "key": "limit", "value": "2" }, { "key": "state", "value": "all" }] } }
+    },
+    {
+      "name": "List events (trace)",
+      "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/v1/procurement/executions/{{execution_id}}/events?format=trace&limit=10", "host": ["{{baseUrl}}"], "path": ["v1","procurement","executions","{{execution_id}}","events"], "query": [{ "key": "format", "value": "trace" }, { "key": "limit", "value": "10" }] } }
+    },
+    {
+      "name": "Get approval",
+      "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/v1/approvals/{{approval_id}}", "host": ["{{baseUrl}}"], "path": ["v1","approvals","{{approval_id}}"] } }
+    },
+    {
+      "name": "Decide approval (approved)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "decide_{{$timestamp}}" }],
+        "body": { "mode": "raw", "raw": "{\"decision\":\"approved\",\"decided_by\":\"approver_01\"}" },
+        "url": { "raw": "{{baseUrl}}/v1/approvals/{{approval_id}}/decision", "host": ["{{baseUrl}}"], "path": ["v1","approvals","{{approval_id}}","decision"] }
+      }
+    },
+    {
+      "name": "Bulk decide",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"approval_ids\":[\"{{approval_id}}\"],\"decision\":\"approved\",\"decided_by\":\"admin_01\"}" },
+        "url": { "raw": "{{baseUrl}}/v1/approvals/bulk/decision", "host": ["{{baseUrl}}"], "path": ["v1","approvals","bulk","decision"] }
+      }
+    },
+    {
+      "name": "Export approvals CSV",
+      "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/v1/approvals/export?tenant=tenant_demo&state=pending", "host": ["{{baseUrl}}"], "path": ["v1","approvals","export"], "query": [{ "key": "tenant", "value": "tenant_demo" }, { "key": "state", "value": "pending" }] } }
+    },
+    {
+      "name": "Create webhook subscription",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"tenant_id\":\"tenant_demo\",\"url\":\"http://webhook.site/test\",\"secret\":\"secret123\",\"events\":[\"execution.completed\",\"approval.requested\"]}" },
+        "url": { "raw": "{{baseUrl}}/v1/webhooks/subscriptions", "host": ["{{baseUrl}}"], "path": ["v1","webhooks","subscriptions"] }
+      }
+    },
+    {
+      "name": "List webhooks",
+      "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/v1/webhooks/subscriptions?tenant_id=tenant_demo", "host": ["{{baseUrl}}"], "path": ["v1","webhooks","subscriptions"], "query": [{ "key": "tenant_id", "value": "tenant_demo" }] } }
+    },
+    {
+      "name": "Metrics",
+      "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/metrics", "host": ["{{baseUrl}}"], "path": ["metrics"] } }
+    },
+    {
+      "name": "Readyz",
+      "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/readyz", "host": ["{{baseUrl}}"], "path": ["readyz"] } }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "execution_id", "value": "exec_xxx" },
+    { "key": "approval_id", "value": "appr_xxx" }
+  ]
+}

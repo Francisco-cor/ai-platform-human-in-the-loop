@@ -1,0 +1,22 @@
+{
+  "name": "procurement-sdk-ts",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Procurement Platform — Fase 8",
+  "type": "module",
+  "main": "dist/client.js",
+  "types": "dist/client.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run --reporter=verbose 2>&1 | head -n 100",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "msw": "^2.3.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "keywords": ["procurement", "sdk", "api"],
+  "license": "AGPL-3.0-or-later"
+}

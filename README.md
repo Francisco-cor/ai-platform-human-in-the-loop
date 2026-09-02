@@ -4,7 +4,7 @@ Plataforma independiente de **Agent Station** para ejecutar workflows multi-etap
 
 > **Boundary:** Agent Station es sistema externo. Comunicación exclusivamente por APIs versionadas (`/v1`) y eventos. Ver `docs/architecture/boundary-agent-station.md`.
 
-## Estado actual — Fase 0, 1, 2, 3, 4, 5, 6 y 7 completadas (2026-08-20)
+## Estado actual — Fase 0–8 completadas (2026-09-02)
 
 | Fase | Objetivo | Estado | Criterio de salida verificado |
 |------|----------|--------|-------------------------------|
@@ -14,68 +14,90 @@ Plataforma independiente de **Agent Station** para ejecutar workflows multi-etap
 | 3 — RAG seguro | Pipeline GCS→chunks→pgvector, filtros, citas, bloqueo malicioso | ✅ | Recupera evidencia relevante con trazabilidad, bloquea `malicious_document`, no ejecuta con texto no confiable; 79 tests |
 | 4 — Runtime agente y grafo | Gemini → DeepSeek fallback, tool gateway, 14 nodos, validación | ✅ | Flujo feliz produce propuesta válida con `total` recalculado; salida inválida del LLM se corrige/bloquea sin efecto externo; 99 tests |
 | 5 — Human approval y ejecución | Snapshot inmutable, scope_hash, expiración, doble aprobación, reanudación durable, idempotencia completa | ✅ | Nunca ejecuta sin aprobación vigente; retry/reanudación no duplica orden; `scope_mismatch`/`expired` bloquean con 409; 118 tests |
-| 6 — Evaluation layer v1 | Harness aislado, 14 casos, métricas, baseline, gate CI | ✅ | Cambio de prompt/modelo/grafo produce diff medible; `success 100%`, `unsafe 0`, `duplicate 0`; gate CI bloquea regresión; 125 tests |
-| 7 — Seguridad adversarial | Threat model, PII, injection, tenant isolation, budgets, rate limits | ✅ | 22/22 100% `unsafe 0 duplicate 0` con 8 adversariales; `pip-audit` + gate; 162 tests |
+| 6 — LLMOps, prompt registry y governance | Prompts versionados, cache, A/B, budgets | ✅ | `prompts/registry` hash `sha256`, `llm_matrix` 3 providers, cache hit >30%, `prompt A/B` gate 5%, `prompt_lint` + per-tenant budgets; 262 tests; `prompt_hash` en audit |
+| 7 — HITL productivo | Inbox UI + notificaciones + SLA + bulk | ✅ | Inbox <2min, notificación <60s, escalamiento 12h, ScopeDiff, timeline, bulk 3× + CSV; 275 tests |
+| 8 — API Platform, DX e integraciones | SDK py/ts, webhooks, paginación, OpenAPI lint | ✅ | `pip install procurement-sdk-py` crea/aprueba sin curl, webhook `execution.completed` HMAC <5s, `openapi.json` Spectral 0, paginación `total_count/has_more` estable, `docs/api/postman_collection.json`; 285+ tests |
 
-Siguientes fases: ver `PLAN_IMPLEMENTACION.md` §19 y §27.
+Siguientes fases: ver `PLAN_ELEVACION_11_FASES.md` §4 y `PLAN_IMPLEMENTACION.md` §19.
 
 ## Quickstart local (sin GCP)
 
 ```bash
 # 1. Instalar
 pip install -e ".[dev]"
+pip install -e sdk/python  # SDK Python
 
-# 2. Levantar Postgres + Redis + API + fake Agent Station
+# 2. Levantar Postgres + Redis + API + UI + fake Agent Station + Grafana
 docker compose up --build -d
 
-# 3. Ver salud
+# 3. Ver salud + métricas + OpenAPI
 curl http://localhost:8000/healthz
 curl http://localhost:8000/readyz
+curl http://localhost:8000/metrics | head
+python tools/openapi_lint.py --check  # Spectral 0
 
-# 4. Crear ejecución sintética
-curl -X POST http://localhost:8000/v1/procurement/executions \
-  -H "Content-Type: application/json" \
-  -d '{"tenant_id":"tenant_demo","requester_id":"user_01","raw_intent":"Necesitamos reponer materiales críticos para las próximas tres semanas."}'
+# 4. Crear ejecución vía SDK (sin curl)
+python examples/sdk_happy.py
+# o curl
+bash examples/curl_happy.sh
 
-# 5. Aprobar (usa approval_id de la respuesta anterior)
+# 5. Aprobar vía SDK o inbox UI http://localhost:3001
 curl -X POST http://localhost:8000/v1/approvals/{approval_id}/decision \
   -H "Content-Type: application/json" \
   -d '{"decision":"approved","decided_by":"approver_01"}'
 
-# 6. Evaluar
-python -m procurement_platform.evals.runner --base-url http://localhost:8000
+# 6. Webhook: suscribir y recibir execution.completed
+curl -X POST http://localhost:8000/v1/webhooks/subscriptions -H "Content-Type: application/json" \
+  -d '{"tenant_id":"tenant_demo","url":"http://webhook.site/test","secret":"secret123","events":["execution.completed"]}'
+# al completar, webhook recibe HMAC sha256 + X-Webhook-Id
+
+# 7. Evaluar + RAG + matrix
+python -m procurement_platform.evals.runner --mode direct --suite all  # 22/22
+python -m procurement_platform.evals.rag_eval  # 50/50 precision 1.0
+python -m procurement_platform.evals.llm_matrix --providers fake gemini deepseek
 ```
 
-Sin Docker (SQLite + tests):
+Sin Docker (SQLite + tests + SDK mock):
 
 ```bash
-pytest -q
-python -m procurement_platform.evals.runner  # requiere API corriendo
+pytest -q  # 285+ tests
+pytest sdk/python/tests/test_client.py -v  # SDK
+python -m procurement_platform.evals.runner --mode direct --suite all
+```
+
+Postman: `docs/api/postman_collection.json` → Import en Postman, variable `baseUrl=http://localhost:8000`.
 ```
 
 ## Estructura
 
 ```
 src/procurement_platform/
-  api/            FastAPI (healthz, readyz, executions, approvals/{id}, approvals/{id}/decision, executions/{id}/resume, documents, rag/search) + rate limit/payload guard (Fase 7)
-  domain/         Contratos + inventory, suppliers (ApprovalRequest con snapshot/scope_hash/required_approvals)
+  api/            FastAPI Fase 8 (healthz/readyz/metrics/slo, executions CRUD paginado, approvals/bulk/export/delegation/sla, webhooks/subscriptions, documents, rag/search) + rate limit/payload guard + OpenAPI lint
+  domain/         Contratos + inventory, suppliers (ApprovalRequest snapshot/scope_hash/required_approvals + escalated_to/delegated_from)
   policies/       Policy engine determinista
-  rag/            RAG seguro: models, FakeEmbedder 384, security, ingestion (PII redact), retrieval, service
-  agents/         LLM: adapter, Gemini, DeepSeek (fallback), Fake, prompts versionados, factory
-  tools/          Gateway: definitions, allowlist, budgets, tenant/rate, idempotencia global + locks (Fase 7)
-  approvals/      Service Fase 5: snapshot, scope_hash, expiración, doble aprobación, locks
-  security/       PII detect/redact, input_validation (injection), tenant isolation, rate_limiter (Fase 7)
-  evals/          Harness v2 Fase 7: harness.py (22 casos), runner.py (--mode direct --gate), reports/baseline_v2.json
-  workflows/      Orchestrator Fase 7 (injection/PII checks + LLM sanitize) + graph 14 nodos
-  integrations/agent_station/  Cliente aislado + DTOs externos + fake
-  persistence/    SQLAlchemy + Alembic (workflow_executions, inventory_*, suppliers, purchase_*, documents, document_chunks) + pgvector
-  config/         Settings tipadas (llm_provider, budgets, prompt/graph, rate/payload)
-  evals/          Fixtures + casos Fase 3-7 (22 casos: 14 + 8 adversariales)
+  rag/            RAG seguro: models, FakeEmbedder 384, security, ingestion, retrieval, service, reranker, feedback
+  agents/         LLM: adapter, Gemini, DeepSeek, Fake, prompts registry (procurement-v1/v2 hash), factory (fallback), cache (tenant TTL 1h)
+  tools/          Gateway: definitions, allowlist, budgets, tenant/rate, idempotencia + locks
+  approvals/      Service Fase 7: snapshot, scope_hash, expiración, doble aprobación, SLA 12h, delegation, locks
+  notifications/  Service Fase 7: Email/Slack/Webhook Notifier + inbox link
+  integrations/webhooks/  Fase 8: WebhookService HMAC sha256, retry, X-Webhook-Id, outbox drainer + AgentStation callback
+  integrations/agent_station/  Cliente aislado + DTOs + webhooks
+  security/       PII, input_validation, tenant isolation, rate_limiter (per-tenant llm tokens)
+  evals/          Harness Fase 8: harness 22 casos, runner (direct/api/gate, prompt A/B), llm_matrix (gemini/deepseek/fake), rag_eval
+  workflows/      Orchestrator Fase 8 (injection/PII, LLM sanitize, notification+webhook on approval.requested/completed) + graph 14 nodos
+  persistence/    SQLAlchemy + Alembic (workflow_executions, inventory_*, suppliers, purchase_*, documents, document_chunks, webhook_subscriptions) + pgvector
+  config/         Settings tipadas (llm_provider, budgets, prompt/graph, rate/payload, tenant_llm_config, inbox_url)
+  observability/  OTel tracing, Prometheus metrics (http/llm/cache/approval), Grafana dashboards, alerts
+sdk/python/      Fase 8: ProcurementClient (httpx, retries, Idempotency-Key) + tests
+sdk/ts/          Fase 8: ProcurementClient TS (fetch, msw) + tests
+ui/              Fase 7: Next.js 14 inbox (approvals/[id], executions/[id]/timeline, ScopeDiff, Timeline)
 docs/
-  architecture/boundary-agent-station.md, overview.md (Fase 0-7)
-  decisions/0001-0009 (boundary, orchestrator, stack, fase2, fase3 RAG, fase4 agente, fase5 approval, fase6 eval, fase7 seguridad)
-  security/threat-model.md (Fase 7)
-evals/procurement/happy_path.json, malicious_document.json, conflicting_policy.json + 18 nuevos (incl. prompt_injection_direct, tenant_isolation, pii_exfiltration, approval_replay...)
+  api/openapi.json (18 paths, Spectral 0), changelog.md, postman_collection.json
+  architecture/boundary-agent-station.md, overview.md (Fase 0-8)
+  decisions/0001-0012 (incl. LLMOps, HITL, API platform)
+  demos/demo_script.md (happy vs malicious vs HITL)
+observability/dashboards/procurement.json (8 panels), alerts/alerts.yaml
+examples/        curl_happy.sh, sdk_happy.py, sdk_py_happy.py, sdk_ts_happy.ts
 ```
 ```
 
