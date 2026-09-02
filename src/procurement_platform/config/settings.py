@@ -100,6 +100,15 @@ class Settings(BaseSettings):
     # Auth (F3-1)
     jwt_secret: str | None = Field(default=None, alias="PROCUREMENT_JWT_SECRET")
 
+    # Fase 6 — LLMOps per-tenant token budgets y model allowlist
+    # JSON env var example: PROCUREMENT_TENANT_LLM_CONFIG='{"tenant_demo":{"models":["gemini","fake"],"max_tokens":8000}}'
+    tenant_llm_config_raw: str | None = Field(
+        default=None, alias="PROCUREMENT_TENANT_LLM_CONFIG"
+    )
+    # Cache TTL for LLM cache (seconds)
+    llm_cache_ttl_seconds: int = Field(default=3600, alias="PROCUREMENT_LLM_CACHE_TTL")
+    llm_cache_enabled: bool = Field(default=True, alias="PROCUREMENT_LLM_CACHE_ENABLED")
+
     @property
     def is_local(self) -> bool:
         return self.app_env == "local"
@@ -107,6 +116,38 @@ class Settings(BaseSettings):
     @property
     def is_ci(self) -> bool:
         return self.app_env == "ci"
+
+    def get_tenant_llm_config(self, tenant_id: str) -> dict:
+        """Retorna config per-tenant {models: [...], max_tokens: int} con defaults."""
+        defaults = {"models": ["gemini", "deepseek", "fake"], "max_tokens": self.max_tokens_per_execution}
+        if not self.tenant_llm_config_raw:
+            # per-tenant default map for demo
+            # si tenant_demo no configurado, usa defaults pero asegura fake permitido
+            return defaults
+        try:
+            import json
+
+            cfg = json.loads(self.tenant_llm_config_raw)
+            if isinstance(cfg, dict) and tenant_id in cfg:
+                tenant_cfg = cfg[tenant_id]
+                models = tenant_cfg.get("models", defaults["models"])
+                max_tokens = int(tenant_cfg.get("max_tokens", defaults["max_tokens"]))
+                return {"models": models, "max_tokens": max_tokens}
+            # also support wildcard "*"
+            if isinstance(cfg, dict) and "*" in cfg and tenant_id not in cfg:
+                tenant_cfg = cfg["*"]
+                models = tenant_cfg.get("models", defaults["models"])
+                max_tokens = int(tenant_cfg.get("max_tokens", defaults["max_tokens"]))
+                return {"models": models, "max_tokens": max_tokens}
+        except Exception:
+            pass
+        return defaults
+
+    def is_model_allowed_for_tenant(self, tenant_id: str, provider: str) -> bool:
+        cfg = self.get_tenant_llm_config(tenant_id)
+        allowed = cfg.get("models", [])
+        # model provider check is case-insensitive, allow "fake" always if not restricted? But respect allowlist strictly
+        return provider.lower() in [m.lower() for m in allowed]
 
 
 @lru_cache

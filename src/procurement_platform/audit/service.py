@@ -48,12 +48,19 @@ def create_audit_event(
         except Exception:
             pass
     # F5-3: ensure model_metadata includes prompt/graph version if missing
+    # Fase 6: also include prompt_hash (sha256 of registry file) for traceability & BigQuery lineage
     if model_metadata is None:
         try:
             from procurement_platform.config.settings import get_settings
 
             s = get_settings()
             model_metadata = {"prompt_version": s.prompt_version, "graph_version": s.graph_version}
+            try:
+                from procurement_platform.agents.prompts import get_prompt_hash
+
+                model_metadata["prompt_hash"] = get_prompt_hash(s.prompt_version)
+            except Exception:
+                pass
         except Exception:
             model_metadata = {}
     else:
@@ -66,6 +73,15 @@ def create_audit_event(
                 model_metadata["prompt_version"] = s.prompt_version
             if "graph_version" not in model_metadata:
                 model_metadata["graph_version"] = s.graph_version
+            if "prompt_hash" not in model_metadata:
+                try:
+                    from procurement_platform.agents.prompts import get_prompt_hash
+
+                    model_metadata["prompt_hash"] = get_prompt_hash(
+                        model_metadata.get("prompt_version", s.prompt_version)
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
     # include duration_ms and span_id in details for drill-down

@@ -199,6 +199,16 @@ class MetricsRegistry:
         self.execution_duration_seconds = _Histogram(
             "execution_duration_seconds", "Execution duration", labelnames=("status",)
         )
+        # Fase 6 — LLM cache hit/miss
+        self.llm_cache_hits_total = _Counter(
+            "llm_cache_hits_total", "LLM cache hits/misses", labelnames=("tenant", "result")
+        )
+        self.llm_cache_hit_rate = _Gauge(
+            "llm_cache_hit_rate", "LLM cache hit rate", labelnames=("tenant",)
+        )
+        # internal counters for hit rate calculation
+        self._cache_hits: dict[str, int] = {}
+        self._cache_misses: dict[str, int] = {}
 
     # helpers
     def observe_http(self, method: str, path: str, status: int, duration_s: float) -> None:
@@ -256,6 +266,28 @@ class MetricsRegistry:
     def set_approval_pending(self, tenant: str, count: int) -> None:
         self.approval_pending.set(float(count), {"tenant": tenant})
 
+    def inc_cache(self, tenant: str, hit: bool) -> None:
+        result = "hit" if hit else "miss"
+        self.llm_cache_hits_total.inc(1, {"tenant": tenant, "result": result})
+        # track for hit_rate gauge
+        try:
+            if hit:
+                self._cache_hits[tenant] = self._cache_hits.get(tenant, 0) + 1
+            else:
+                self._cache_misses[tenant] = self._cache_misses.get(tenant, 0) + 1
+            total = self._cache_hits.get(tenant, 0) + self._cache_misses.get(tenant, 0)
+            if total > 0:
+                rate = self._cache_hits.get(tenant, 0) / total
+                self.llm_cache_hit_rate.set(rate, {"tenant": tenant})
+        except Exception:
+            pass
+
+    def get_cache_hit_rate(self, tenant: str) -> float:
+        hits = self._cache_hits.get(tenant, 0)
+        misses = self._cache_misses.get(tenant, 0)
+        total = hits + misses
+        return (hits / total) if total else 0.0
+
     def generate(self) -> str:
         lines: list[str] = []
         for metric in [
@@ -273,6 +305,8 @@ class MetricsRegistry:
             self.execution_duration_seconds,
             self.approval_pending,
             self.approval_age_seconds,
+            self.llm_cache_hits_total,
+            self.llm_cache_hit_rate,
         ]:
             lines.extend(metric.collect())
         return "\n".join(lines) + "\n"

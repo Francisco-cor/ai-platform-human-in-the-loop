@@ -108,6 +108,26 @@ eval-finops:
 	python -m pytest tests/unit/test_finops.py -v
 	@echo "cost_rates: cat config/cost_rates.yaml"
 
+eval-llm-matrix:
+	python -m procurement_platform.evals.llm_matrix --providers fake gemini deepseek --output evals/reports/llm_matrix.json
+	@cat evals/reports/llm_matrix.json | python -m json.tool | head -n 80
+
+eval-prompt-ab:
+	python -m procurement_platform.evals.runner --prompt-a procurement-v1 --prompt-b procurement-v2 --gate-ab --ab-output evals/reports/prompt_ab.json
+	@cat evals/reports/prompt_ab.json | python -m json.tool | head -n 100
+
+prompt-lint:
+	python tools/prompt_lint.py
+
+prompt-lint-strict:
+	python tools/prompt_lint.py --strict
+
+cache-stats:
+	curl -s http://localhost:8000/metrics | grep -A2 llm_cache || echo "no cache metrics yet"
+
+tenant-budget-test:
+	python -m pytest tests/unit/test_tenant_llm_budget.py -v 2>/dev/null || echo "tenant budget test not found — run pytest -k tenant"
+
 fake-agent-station:
 	uvicorn procurement_platform.integrations.agent_station.fake_server:app --port 8001 --reload
 

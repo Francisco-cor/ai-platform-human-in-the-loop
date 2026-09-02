@@ -46,6 +46,24 @@ class RateLimiter:
         self._lock = Lock()
 
     def _get_limit(self, key: str) -> tuple[int, int] | None:
+        # Fase 6 — llm per-tenant tokens: llm:{tenant}:tokens -> limit = tenant_max_tokens per 60s
+        if key.startswith("llm:") and key.endswith(":tokens"):
+            try:
+                from procurement_platform.config.settings import get_settings
+
+                settings = get_settings()
+                # key format llm:{tenant}:tokens
+                parts = key.split(":")
+                if len(parts) >= 2:
+                    tenant = parts[1]
+                    cfg = settings.get_tenant_llm_config(tenant)
+                    max_tok = int(cfg.get("max_tokens", 8000))
+                    # window 60s for rate limit check
+                    return (max_tok, 60)
+            except Exception:
+                pass
+            # fallback
+            return (8000, 60)
         # plan-aware: if key is api:create_execution:{tenant}, check tenant plan override
         if key.startswith("api:create_execution:"):
             tenant = key.split(":")[-1]

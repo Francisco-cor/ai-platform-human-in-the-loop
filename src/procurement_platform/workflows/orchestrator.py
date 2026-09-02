@@ -252,34 +252,56 @@ def _check_budget_or_raise(execution_id: str, tenant_id: str, additional_tokens:
     try:
         from procurement_platform.config.settings import get_settings
 
-        max_tokens = get_settings().max_tokens_per_execution
+        settings = get_settings()
+        max_tokens = settings.max_tokens_per_execution
+        # Fase 6: per-tenant max_tokens override (tenant_llm_config)
+        try:
+            tenant_cfg = settings.get_tenant_llm_config(tenant_id)
+            max_tenant = int(tenant_cfg.get("max_tokens", max_tokens))
+        except Exception:
+            max_tenant = max_tokens
     except Exception:
         max_tokens = 8000
+        max_tenant = 8000
     with _cost_lock:
-        used = (
-            _execution_token_usage.get(execution_id, 0) + _tenant_token_usage.get(tenant_id, 0) * 0
-        )  # tenant global not sum
-        # simple: check execution only; tenant budget is same limit per execution (could be higher)
-        if used + additional_tokens > max_tokens:
+        used_exec = _execution_token_usage.get(execution_id, 0)
+        # Fase 6: per-tenant per-execution limit (override, no global acumulado)
+        # Si tenant tiene max_tenant distinto de max_tokens, usar el menor o el tenant como override por ejecución
+        effective_max = max_tenant if max_tenant != max_tokens else max_tokens
+        # check execution budget (con tenant override)
+        if used_exec + additional_tokens > effective_max:
             try:
                 from procurement_platform.observability.metrics import get_metrics
 
                 get_metrics().inc_budget_exceeded(tenant_id, "max_tokens_per_execution")
             except Exception:
                 pass
+            # si fue tenant override, mensaje indica tenant
+            if max_tenant != max_tokens:
+                raise BudgetExhausted(
+                    f"budget_exceeded: execution {execution_id} tenant {tenant_id} tokens {used_exec}+{additional_tokens} > {effective_max} (tenant limit)"
+                )
             raise BudgetExhausted(
-                f"budget_exceeded: execution {execution_id} tokens {used}+{additional_tokens} > {max_tokens}"
+                f"budget_exceeded: execution {execution_id} tokens {used_exec}+{additional_tokens} > {max_tokens}"
             )
 
 
 def _record_llm_usage(
-    execution_id: str, tenant_id: str, provider: str, model: str, usage: Any
+    execution_id: str, tenant_id: str, provider: str, model: str, usage: Any, was_cached: bool = False
 ) -> float:
     """F5-4: registra tokens/cost y actualiza métricas. Retorna cost."""
     try:
         from procurement_platform.agents.adapter import estimate_cost
         from procurement_platform.observability.metrics import get_metrics
 
+        # Fase 6: si fue cache, no duplicar tokens/cost para FinOps (pero sí métrica hit ya registrada en factory)
+        if was_cached:
+            try:
+                m = get_metrics()
+                m.inc_llm_request(provider, model, "cached")
+            except Exception:
+                pass
+            return 0.0
         cost = estimate_cost(provider, model, usage)
         with _cost_lock:
             _execution_token_usage[execution_id] = (
@@ -912,6 +934,13 @@ class WorkflowOrchestrator:
             from procurement_platform.config.settings import get_settings
 
             settings = get_settings()
+            # Fase 6: prompt_hash trazable
+            try:
+                from procurement_platform.agents.prompts import get_prompt_hash
+
+                prompt_hash = get_prompt_hash(settings.prompt_version)
+            except Exception:
+                prompt_hash = None
             system = get_system_prompt(settings.prompt_version)
             # Construir contexto truncado
             shortages_str = str(
@@ -992,9 +1021,10 @@ class WorkflowOrchestrator:
                 graph_version=settings.graph_version,
                 tenant_id=normalized.tenant_id,
                 execution_id=execution_id or normalized.request_id,
+                prompt_hash=prompt_hash,
             )
             resp = run_llm_sync(req)
-            # F5-4: record tokens/cost
+            # F5-4: record tokens/cost (Fase 6: skip if cached)
             try:
                 _record_llm_usage(
                     execution_id or normalized.request_id,
@@ -1002,6 +1032,7 @@ class WorkflowOrchestrator:
                     resp.provider,
                     resp.model,
                     resp.usage,
+                    was_cached=getattr(resp, "was_cached", False),
                 )
             except Exception:
                 pass

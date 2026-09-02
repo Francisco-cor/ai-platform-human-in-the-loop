@@ -1,9 +1,80 @@
-"""Prompts versionados — Fase 4.
+"""Prompts versionados — Fase 4 + Fase 6 registry file-based con hash.
 
-Cada prompt tiene versión y debe ser auditable. No contiene reglas críticas (viven en policy engine).
+Fase 6: prompts/registry/{procurement-v1,v2}.yaml versionados con sha256(file) auditable.
+Loader valida prompt_hash y expone get_prompt(version, key, expected_hash).
+Fallback a PROMPTS dict para CI/backward compat si YAML no disponible.
 """
 
 from __future__ import annotations
+
+import hashlib
+import pathlib
+from functools import lru_cache
+
+import yaml  # type: ignore
+
+# Paths candidatos para registry (repo root vs installed)
+_CANDIDATE_DIRS = [
+    pathlib.Path("prompts/registry"),
+    pathlib.Path(__file__).parent.parent.parent.parent / "prompts" / "registry",
+    pathlib.Path.cwd() / "prompts" / "registry",
+]
+
+# Cache {version: (hash, prompts_dict)}
+_registry_cache: dict[str, tuple[str, dict[str, str]]] = {}
+
+
+def _find_registry_file(version: str) -> pathlib.Path | None:
+    fname = f"{version}.yaml"
+    for d in _CANDIDATE_DIRS:
+        p = d / fname
+        if p.exists():
+            return p
+    # also try absolute from settings? search recursively
+    try:
+        # walk up from cwd
+        cur = pathlib.Path.cwd()
+        for _ in range(4):
+            cand = cur / "prompts" / "registry" / fname
+            if cand.exists():
+                return cand
+            cur = cur.parent
+    except Exception:
+        pass
+    return None
+
+
+def _load_yaml_registry(version: str) -> tuple[str, dict[str, str]]:
+    p = _find_registry_file(version)
+    if p is None:
+        raise FileNotFoundError(f"registry file for {version} not found")
+    data = p.read_bytes()
+    h = "sha256:" + hashlib.sha256(data).hexdigest()
+    parsed = yaml.safe_load(data.decode("utf-8"))
+    prompts = parsed.get("prompts", {}) if isinstance(parsed, dict) else {}
+    # normalize ensure str values
+    prompts = {k: str(v) for k, v in prompts.items()}
+    return h, prompts
+
+
+def _ensure_version(version: str) -> tuple[str, dict[str, str]]:
+    if version in _registry_cache:
+        return _registry_cache[version]
+    try:
+        h, prompts = _load_yaml_registry(version)
+        _registry_cache[version] = (h, prompts)
+        return h, prompts
+    except Exception:
+        # fallback to in-memory PROMPTS
+        if version in PROMPTS:
+            # compute hash from fallback dict content deterministic
+            import json
+
+            raw = json.dumps(PROMPTS[version], sort_keys=True).encode()
+            h = "sha256:" + hashlib.sha256(raw).hexdigest()
+            _registry_cache[version] = (h, PROMPTS[version])
+            return h, PROMPTS[version]
+        raise
 
 
 PROMPTS: dict[str, dict[str, str]] = {
@@ -51,17 +122,57 @@ Devuelve JSON con summary y citations.
 }
 
 
-def get_prompt(prompt_version: str, key: str) -> str:
-    if prompt_version not in PROMPTS:
-        raise ValueError(f"prompt_version desconocida: {prompt_version}")
-    if key not in PROMPTS[prompt_version]:
+def get_prompt(
+    prompt_version: str, key: str, expected_hash: str | None = None
+) -> str:
+    h, prompts = _ensure_version(prompt_version)
+    if expected_hash and h != expected_hash:
+        raise ValueError(
+            f"prompt_hash mismatch for {prompt_version}: expected {expected_hash} got {h}"
+        )
+    if key not in prompts:
         raise ValueError(f"prompt key {key} no existe en {prompt_version}")
-    return PROMPTS[prompt_version][key]
+    return prompts[key]
 
 
-def get_system_prompt(prompt_version: str) -> str:
-    return get_prompt(prompt_version, "system")
+def get_system_prompt(prompt_version: str, expected_hash: str | None = None) -> str:
+    return get_prompt(prompt_version, "system", expected_hash=expected_hash)
+
+
+def get_prompt_hash(prompt_version: str) -> str:
+    h, _ = _ensure_version(prompt_version)
+    return h
+
+
+def list_prompt_versions() -> list[str]:
+    # discover from filesystem + fallback
+    versions = set(PROMPTS.keys())
+    for d in _CANDIDATE_DIRS:
+        if d.exists():
+            for p in d.glob("*.yaml"):
+                versions.add(p.stem)
+    return sorted(versions)
+
+
+def get_prompt_metadata(prompt_version: str) -> dict[str, str]:
+    h, prompts = _ensure_version(prompt_version)
+    p = _find_registry_file(prompt_version)
+    return {
+        "prompt_version": prompt_version,
+        "prompt_hash": h,
+        "file": str(p) if p else "in-memory",
+        "keys": ",".join(sorted(prompts.keys())),
+    }
 
 
 def current_prompt_version() -> str:
-    return "procurement-v1"
+    try:
+        from procurement_platform.config.settings import get_settings
+
+        return get_settings().prompt_version
+    except Exception:
+        return "procurement-v1"
+
+
+def reset_prompt_cache() -> None:
+    _registry_cache.clear()

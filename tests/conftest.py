@@ -166,11 +166,47 @@ def _reset_gateway_global():
                 pass
     except Exception:
         pass
+    # Fase 6: reset prompt cache, llm cache, tenant config
+    try:
+        from procurement_platform.agents.prompts import reset_prompt_cache
+
+        reset_prompt_cache()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.agents.cache import reset_llm_cache
+
+        reset_llm_cache()
+    except Exception:
+        pass
+    try:
+        import os as _os
+
+        _os.environ.pop("PROCUREMENT_TENANT_LLM_CONFIG", None)
+        _os.environ.pop("PROCUREMENT_PROMPT_VERSION", None)
+        from procurement_platform.config.settings import reset_settings_cache as _rsc
+
+        # do not clear globally if test sets env explicitly; will be handled per test
+        pass
+    except Exception:
+        pass
     yield
     try:
         from procurement_platform.infra.locks.manager import reset_lock_manager
 
         reset_lock_manager()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.agents.cache import reset_llm_cache
+
+        reset_llm_cache()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.agents.prompts import reset_prompt_cache
+
+        reset_prompt_cache()
     except Exception:
         pass
 

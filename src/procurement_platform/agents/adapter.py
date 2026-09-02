@@ -37,6 +37,7 @@ class LLMRequest(BaseModel):
     tenant_id: str | None = None
     execution_id: str | None = None
     trace_id: str | None = None
+    prompt_hash: str | None = None  # Fase 6: sha256 del registry file para trazabilidad
 
 
 class LLMResponse(BaseModel):
@@ -49,9 +50,11 @@ class LLMResponse(BaseModel):
     latency_ms: int = 0
     prompt_version: str = "procurement-v1"
     graph_version: str = "procurement-graph-v1"
+    prompt_hash: str | None = None  # Fase 6
     # para auditoría
     finish_reason: str = "stop"
     was_fallback: bool = False
+    was_cached: bool = False  # Fase 6: indica si vino de cache
     error: str | None = None
 
 

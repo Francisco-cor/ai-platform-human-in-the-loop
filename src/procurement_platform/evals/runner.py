@@ -158,6 +158,207 @@ def _gate_check(
     return (len(failures) == 0, failures + warnings)
 
 
+def _has_prompt_adr(prompt_version: str) -> bool:
+    """Check if docs/decisions contains ADR mentioning prompt_version (para gate A/B)."""
+    try:
+        from pathlib import Path
+
+        dec_dir = Path("docs/decisions")
+        if not dec_dir.exists():
+            return False
+        for p in dec_dir.glob("*.md"):
+            txt = p.read_text(encoding="utf-8", errors="ignore").lower()
+            if prompt_version.lower() in txt or "prompt" in txt:
+                # heurística: si menciona prompt y versión, considera justificado
+                if prompt_version.lower() in txt:
+                    return True
+        # también check docs/governance/prompt_review.md
+        gov = Path("docs/governance/prompt_review.md")
+        if gov.exists():
+            txt = gov.read_text(encoding="utf-8", errors="ignore").lower()
+            if prompt_version.lower() in txt:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _run_prompt_ab(
+    cases_dir: Path,
+    suite: str,
+    prompt_a: str,
+    prompt_b: str,
+    gate_ab: bool = False,
+    threshold: float = 5.0,
+    output_path: Path | None = None,
+    baseline_path: Path | None = None,
+) -> None:
+    """Fase 6 — prompt A/B gate: corre suite con prompt_a y prompt_b, compara deltas."""
+    import os
+    import time
+
+    from procurement_platform.config.settings import get_settings, reset_settings_cache
+    from procurement_platform.evals.harness import run_suite
+    from procurement_platform.persistence.database import Base, get_sessionmaker
+
+    # validar que versiones existan
+    try:
+        from procurement_platform.agents.prompts import list_prompt_versions
+
+        available = list_prompt_versions()
+        if prompt_a not in available:
+            print(f"WARNING: prompt-a {prompt_a} no está en registry {available}, fallback a dict")
+        if prompt_b not in available:
+            print(f"WARNING: prompt-b {prompt_b} no está en registry {available}")
+    except Exception:
+        pass
+
+    reports: dict[str, dict] = {}
+    for pv in (prompt_a, prompt_b):
+        os.environ["PROCUREMENT_PROMPT_VERSION"] = pv
+        reset_settings_cache()
+        try:
+            from procurement_platform.agents.prompts import reset_prompt_cache
+
+            reset_prompt_cache()
+        except Exception:
+            pass
+        try:
+            from procurement_platform.agents.cache import reset_llm_cache
+
+            reset_llm_cache()
+        except Exception:
+            pass
+        try:
+            from procurement_platform.workflows.orchestrator import reset_finops_state
+
+            reset_finops_state()
+        except Exception:
+            pass
+        try:
+            from procurement_platform.observability.metrics import reset_metrics
+
+            reset_metrics()
+        except Exception:
+            pass
+        SessionLocal = get_sessionmaker()
+        try:
+            import procurement_platform.persistence.models  # noqa: F401
+
+            engine = SessionLocal().get_bind()
+            if engine is None:
+                from procurement_platform.persistence.database import get_engine
+
+                engine = get_engine()
+            Base.metadata.create_all(bind=engine)
+        except Exception:
+            pass
+        db = SessionLocal()
+        try:
+            report = run_suite(cases_dir=cases_dir, suite=suite, db=db)
+            reports[pv] = report
+            m = report["metrics"]
+            print(
+                f"[AB:{pv}] {m['passed']}/{m['total_cases']} success {m['task_success_rate']}% p50 {m['latency_p50_s']} p95 {m['latency_p95_s']} unsafe {m['unsafe_count']} tool_acc {m['tool_call_accuracy']}%"
+            )
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    # compute deltas
+    ra = reports[prompt_a]["metrics"]
+    rb = reports[prompt_b]["metrics"]
+    # hallucination proxy: 100 - tool_call_accuracy (cuando tool falla es alucinación)
+    hall_a = round(100 - ra.get("tool_call_accuracy", 100), 2)
+    hall_b = round(100 - rb.get("tool_call_accuracy", 100), 2)
+    success_delta = round(rb["task_success_rate"] - ra["task_success_rate"], 2)
+    hall_delta = round(hall_b - hall_a, 2)
+    latency_delta = round(rb["latency_p95_s"] - ra["latency_p95_s"], 3)
+    cost_delta = round(rb["avg_cost_per_task"] - ra["avg_cost_per_task"], 5)
+
+    print("\n=== Prompt A/B Comparison ===")
+    print(f"A ({prompt_a}): success {ra['task_success_rate']}% hallucination {hall_a}% p95 {ra['latency_p95_s']}s cost {ra['avg_cost_per_task']}")
+    print(f"B ({prompt_b}): success {rb['task_success_rate']}% hallucination {hall_b}% p95 {rb['latency_p95_s']}s cost {rb['avg_cost_per_task']}")
+    print(f"Delta B-A: success {success_delta:+}% hallucination {hall_delta:+}% p95 {latency_delta:+}s cost {cost_delta:+}")
+    # also compare per-case terminal_state diff
+    diff_cases = []
+    for ca, cb in zip(reports[prompt_a]["results"], reports[prompt_b]["results"], strict=False):
+        if ca["actual"]["terminal_state"] != cb["actual"]["terminal_state"]:
+            diff_cases.append((ca["case_id"], ca["actual"]["terminal_state"], cb["actual"]["terminal_state"]))
+
+    if diff_cases:
+        print(f"Cases with terminal_state diff ({len(diff_cases)}):")
+        for cid, sa, sb in diff_cases:
+            print(f"  {cid}: A={sa} B={sb}")
+
+    ab_report = {
+        "generated_at": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+        "suite": suite,
+        "cases_dir": str(cases_dir),
+        "prompt_a": prompt_a,
+        "prompt_b": prompt_b,
+        "prompt_a_metrics": ra,
+        "prompt_b_metrics": rb,
+        "prompt_a_versions": reports[prompt_a]["versions"],
+        "prompt_b_versions": reports[prompt_b]["versions"],
+        "deltas": {
+            "success_delta_pct": success_delta,
+            "hallucination_delta_pct": hall_delta,
+            "latency_p95_delta_s": latency_delta,
+            "cost_delta_per_task": cost_delta,
+            "hallucination_a": hall_a,
+            "hallucination_b": hall_b,
+        },
+        "diff_cases": diff_cases,
+        "threshold": threshold,
+        "gate_ab": gate_ab,
+    }
+    # save
+    if output_path is None:
+        output_path = Path("evals/reports/prompt_ab.json")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(ab_report, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    print(f"\nA/B report -> {output_path}")
+    # also latest
+    try:
+        (output_path.parent / "latest_prompt_ab.json").write_text(
+            output_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+    # gate check
+    if gate_ab:
+        failed = False
+        reasons: list[str] = []
+        # gate falla si success cae > threshold
+        if success_delta < -threshold:
+            has_adr = _has_prompt_adr(prompt_b)
+            msg = f"task_success cayó {success_delta}% (A {ra['task_success_rate']}% → B {rb['task_success_rate']}%) threshold {threshold}%"
+            if not has_adr:
+                failed = True
+                reasons.append(msg + " sin ADR docs/decisions que lo justifique — gate A/B falló")
+            else:
+                reasons.append(msg + " pero hay ADR/docs que lo justifica — gate warning")
+        # también unsafe no debe aumentar
+        if rb["unsafe_count"] > ra["unsafe_count"]:
+            failed = True
+            reasons.append(f"unsafe_count aumentó {ra['unsafe_count']} → {rb['unsafe_count']} — gate A/B falló")
+        for r in reasons:
+            print(f"gate-ab: {r}")
+        if failed:
+            print("\nGATE A/B FAILED — regresión prompt detectada")
+            import sys
+
+            sys.exit(1)
+        else:
+            print("\nGATE A/B PASSED")
+            if reasons:
+                print("warnings:", reasons)
+
+
 def main() -> None:
     import argparse
     import time
@@ -182,9 +383,29 @@ def main() -> None:
     )
     parser.add_argument("--gate", action="store_true", help="Ejecuta gate y falla si no pasa")
     parser.add_argument("--fail-on-warning", action="store_true", help="Falla también en warnings")
+    # Fase 6 — prompt A/B gate
+    parser.add_argument("--prompt-a", default=None, help="Prompt version A para A/B (ej procurement-v1)")
+    parser.add_argument("--prompt-b", default=None, help="Prompt version B para A/B (ej procurement-v2)")
+    parser.add_argument("--gate-ab", action="store_true", help="Gate A/B: falla si B cae >5%% vs A sin ADR")
+    parser.add_argument("--ab-threshold", type=float, default=5.0, help="Threshold caida success %% para gate A/B")
+    parser.add_argument("--ab-output", default=None, help="Ruta JSON A/B report (default evals/reports/prompt_ab.json)")
     args = parser.parse_args()
 
     cases_dir = Path(args.cases_dir)
+
+    # Fase 6 — prompt A/B mode prioritario si ambos provistos
+    if args.prompt_a and args.prompt_b:
+        _run_prompt_ab(
+            cases_dir=cases_dir,
+            suite=args.suite,
+            prompt_a=args.prompt_a,
+            prompt_b=args.prompt_b,
+            gate_ab=args.gate_ab or args.gate,
+            threshold=args.ab_threshold,
+            output_path=Path(args.ab_output) if args.ab_output else (Path(args.output) if args.output else None),
+            baseline_path=Path(args.baseline) if args.baseline else None,
+        )
+        return
 
     # Modo API (legacy)
     if args.mode == "api":

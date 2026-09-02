@@ -16,6 +16,8 @@ jobs:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
+      - name: prompt governance lint — Fase 6
+        run: python tools/prompt_lint.py
       - run: pytest -q
       - name: dependency scan — Fase 7
         run: |
@@ -31,6 +33,14 @@ jobs:
           if [ -f evals/reports/baseline_v2.json ]; then BASELINE=evals/reports/baseline_v2.json; else BASELINE=evals/reports/baseline_v1.json; fi
           echo "Using baseline $BASELINE"
           python -m procurement_platform.evals.runner --mode direct --suite all --gate --baseline $BASELINE
+      - name: llm matrix (provider comparison) — Fase 6
+        run: |
+          python -m procurement_platform.evals.llm_matrix --providers fake gemini deepseek --output evals/reports/ci_llm_matrix.json
+          cat evals/reports/ci_llm_matrix.json | python -m json.tool | head -n 60
+      - name: prompt A/B gate — Fase 6
+        run: |
+          python -m procurement_platform.evals.runner --prompt-a procurement-v1 --prompt-b procurement-v2 --gate-ab --ab-output evals/reports/ci_prompt_ab.json
+          cat evals/reports/ci_prompt_ab.json | python -m json.tool | head -n 80
       - name: security adversarial checks — Fase 7
         run: |
           python -m pytest tests/security -v
