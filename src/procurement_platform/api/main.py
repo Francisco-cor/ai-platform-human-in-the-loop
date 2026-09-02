@@ -31,8 +31,8 @@ logger = get_logger("api")
 
 app = FastAPI(
     title="procurement-platform",
-    version="0.1.0",
-    description="Enterprise Agentic AI Platform — Fase 0-5 con RAG seguro y aprobación humana durable",
+    version="1.0.0",
+    description="Enterprise Agentic AI Platform — Fase 0-11 OSS 1.0 con RAG seguro, platform core y expense workflow",
 )
 
 # F5-1: OTEL tracing auto-instrumented
@@ -44,6 +44,14 @@ except Exception as _e:
     logger.warning("tracing_setup_failed", error=str(_e))
 
 orchestrator = WorkflowOrchestrator()
+
+# Fase 11 — expense orchestrator (reuses platform core)
+try:
+    from procurement_platform.domains.expense.workflow import ExpenseOrchestrator
+
+    expense_orchestrator = ExpenseOrchestrator()
+except Exception:
+    expense_orchestrator = None  # fallback for tests without expense domain
 
 # Ensure tables exist on startup (for sqlite local; postgres handled via alembic)
 try:
@@ -1298,9 +1306,44 @@ def decide_approval(
                 },
             )
 
+    # Detect domain: expense if proposal has amount and no supplier_id
+    is_expense = False
+    if target_exec.proposal and isinstance(target_exec.proposal, dict):
+        is_expense = "amount" in target_exec.proposal and "supplier_id" not in target_exec.proposal
     # delegar a orchestrator según decisión — maneja expiración, doble aprobación, locks, gateway
     try:
-        if decision == "approved":
+        if is_expense and expense_orchestrator:
+            if decision == "approved":
+                exec_obj = expense_orchestrator.approve(db, execution_id, decided_by=decided_by, trace_id=trace_id)
+                appr_after = exec_obj.approval_request
+                # for expense, appr is dict
+                if isinstance(appr_after, dict):
+                    req = appr_after.get("required_approvals", 1)
+                    rec = appr_after.get("approvals_received", 0)
+                    if appr_after.get("status") == "pending" and rec < req:
+                        resp = {
+                            "approval_id": approval_id,
+                            "execution_id": execution_id,
+                            "status": "partially_approved",
+                            "approvers": appr_after.get("approvers", []),
+                            "required_approvals": req,
+                            "approvals_received": rec,
+                            "execution_status": exec_obj.status,
+                            "message": f"requires {req} approvals, received {rec}",
+                        }
+                    else:
+                        resp = {"approval_id": approval_id, "execution_id": execution_id, "status": "approved", "execution_status": exec_obj.status}
+                else:
+                    # fallback to procurement handling
+                    resp = {"approval_id": approval_id, "execution_id": execution_id, "status": "approved", "execution_status": str(exec_obj.status)}
+            elif decision == "rejected":
+                exec_obj = expense_orchestrator.reject(db, execution_id, decided_by=decided_by, trace_id=trace_id)
+                resp = {"approval_id": approval_id, "execution_id": execution_id, "status": "rejected", "execution_status": exec_obj.status}
+            else:
+                # needs_changes: treat as reject for expense MVP
+                exec_obj = expense_orchestrator.reject(db, execution_id, decided_by=decided_by, trace_id=trace_id)
+                resp = {"approval_id": approval_id, "execution_id": execution_id, "status": "needs_changes", "execution_status": exec_obj.status}
+        elif decision == "approved":
             exec_obj = orchestrator.approve_and_complete(
                 db, execution_id, decided_by=decided_by, trace_id=trace_id, decision_reason=reason
             )
@@ -1932,6 +1975,134 @@ def rag_feedback_stats(
     from procurement_platform.rag.feedback_store import list_top_feedback
 
     return {"tenant_id": tenant_id, "results": list_top_feedback(db, tenant_id, limit=limit)}
+
+
+# ---------------------------------------------------------------------------
+# Fase 11 — Expense domain (second workflow) — reuses platform core
+# ---------------------------------------------------------------------------
+@app.post("/v1/expense/executions", status_code=202, tags=["expense"])
+def create_expense_execution(
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Fase 11 expense: POST /v1/expense/executions {amount, currency, reason}."""
+    if expense_orchestrator is None:
+        raise HTTPException(status_code=503, detail={"code": "expense_not_configured", "message": "expense domain not available"})
+    tenant_id = payload.get("tenant_id") or (principal.tenant_id if principal.auth_method != "anonymous" else "tenant_demo")
+    if principal.auth_method != "anonymous" and principal.tenant_id != tenant_id:
+        raise HTTPException(status_code=403, detail={"code": "tenant_forbidden", "message": "tenant mismatch"})
+    # Idempotency
+    key = idempotency_key or payload.get("idempotency_key")
+    if key:
+        existing = db.get(IdempotencyKey, key)
+        if existing and existing.response_json:
+            return JSONResponse(status_code=202, content=existing.response_json)
+    # Validate amount
+    amount = payload.get("amount")
+    if amount is None:
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "amount required"})
+    try:
+        amount = float(amount)
+    except Exception:
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "invalid amount"})
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "amount must be >0"})
+    currency = payload.get("currency", "USD")
+    if currency not in ("USD",):
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": f"currency {currency} not supported"})
+    reason = payload.get("reason") or payload.get("description") or "expense"
+    if len(reason) < 3:
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "reason too short"})
+    request_id = payload.get("request_id") or request.state.request_id
+    if not request_id.startswith("req_"):
+        request_id = f"req_{uuid.uuid4().hex[:12]}"
+    trace_id = request.state.trace_id
+    from procurement_platform.domains.expense.models import ExpenseRequest
+
+    normalized = ExpenseRequest(
+        request_id=request_id,
+        tenant_id=tenant_id,
+        requester_id=payload.get("requester_id") or "user_01",
+        amount=amount,
+        currency=currency,
+        reason=reason,
+        created_at=utcnow(),
+        raw_intent=payload.get("raw_intent"),
+    )
+    row = expense_orchestrator.create_execution(db, normalized=normalized, trace_id=trace_id)
+    row = expense_orchestrator.advance(db, row.execution_id, trace_id=trace_id)
+    # Build response similar to procurement
+    appr = row.approval_request
+    resp_body = {
+        "execution_id": row.execution_id,
+        "request_id": row.request_id,
+        "tenant_id": row.tenant_id,
+        "status": row.status,
+        "current_node": row.current_node,
+        "domain": "expense",
+        "proposal": row.proposal,
+        "approval_request": appr,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+    if key:
+        db.add(IdempotencyKey(key=key, scope="create_expense", execution_id=row.execution_id, response_json=resp_body, created_at=utcnow()))
+        db.commit()
+    return JSONResponse(status_code=202, content=resp_body)
+
+
+@app.get("/v1/expense/executions/{execution_id}", tags=["expense"])
+def get_expense_execution(execution_id: str, db: Session = Depends(get_db)):
+    if expense_orchestrator is None:
+        raise HTTPException(status_code=503, detail={"code": "expense_not_configured"})
+    row = expense_orchestrator.get_execution(db, execution_id)
+    if not row:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "execution not found"})
+    return {
+        "execution_id": row.execution_id,
+        "request_id": row.request_id,
+        "tenant_id": row.tenant_id,
+        "status": row.status,
+        "current_node": row.current_node,
+        "domain": "expense",
+        "proposal": row.proposal,
+        "approval_request": row.approval_request,
+        "normalized_request": row.normalized_request,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "trace_id": row.trace_id,
+    }
+
+
+@app.get("/v1/expense/executions", tags=["expense"])
+def list_expense_executions(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+    tenant_id: str | None = None,
+    limit: int = 50,
+):
+    if expense_orchestrator is None:
+        raise HTTPException(status_code=503, detail={"code": "expense_not_configured"})
+    effective_tenant = tenant_id or (principal.tenant_id if principal.auth_method != "anonymous" else None)
+    # Filter by expense domain: check proposal has amount or domain expense (we use proposal containing amount)
+    q = db.query(WorkflowExecution).order_by(WorkflowExecution.created_at.asc())
+    if effective_tenant:
+        q = q.filter(WorkflowExecution.tenant_id == effective_tenant)
+    rows = q.all()
+    # Filter expense: proposal contains amount
+    expense_rows = [r for r in rows if r.proposal and isinstance(r.proposal, dict) and "amount" in r.proposal]
+    total = len(expense_rows)
+    expense_rows = expense_rows[: min(limit, 100)]
+    return {
+        "count": len(expense_rows),
+        "total_count": total,
+        "executions": [
+            {"execution_id": r.execution_id, "request_id": r.request_id, "tenant_id": r.tenant_id, "status": r.status, "current_node": r.current_node, "domain": "expense", "amount": r.proposal.get("amount") if isinstance(r.proposal, dict) else None}
+            for r in expense_rows
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------

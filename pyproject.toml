@@ -1,7 +1,7 @@
 [project]
 name = "procurement-platform"
-version = "0.1.0"
-description = "Enterprise Agentic AI Platform — Procurement / Human-in-the-Loop (Fase 0-7)"
+version = "1.0.0"
+description = "Enterprise Agentic AI Platform — Procurement / Human-in-the-Loop (Fase 0-11) — OSS 1.0"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0-or-later" }
@@ -21,6 +21,9 @@ dependencies = [
   "opentelemetry-api>=1.27.0",
   "opentelemetry-sdk>=1.27.0",
 ]
+
+[project.entry-points."procurement.tools"]
+calculate_shortage = "procurement_platform.tools.builtin.calculate_shortage:handler"
 
 [project.optional-dependencies]
 dev = [

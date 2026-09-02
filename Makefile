@@ -257,9 +257,6 @@ retention-run:
 artifacts-list:
 	curl -s "http://localhost:8000/v1/artifacts?prefix=evals/" | python -m json.tool
 
-eval-all-domains:
-	python -m procurement_platform.evals.runner --mode direct --suite all
-
 # Fase 10 — Cloud Native, GitOps y SRE
 docker-build:
 	docker buildx build --build-arg VERSION=$${VERSION:-0.1.0} --tag procurement-platform:local --load . && echo "image procurement-platform:local built VERSION=$${VERSION:-0.1.0}"
@@ -296,5 +293,20 @@ slo-check:
 runbooks:
 	ls -R docs/operations/runbooks
 
+eval-all-domains:
+	python -c "from procurement_platform.platform.evals.harness import run_all_domains; import json; r=run_all_domains(); print(json.dumps({k: (v.get('metrics',{}).get('task_success_rate') if isinstance(v, dict) else 'ok') for k,v in r.items()}, indent=2)); print('procurement 22/22:', r['procurement']['metrics']['task_success_rate'], 'expense', r['expense']['cases'][0]['status'])"
+	@echo "expense via: curl -X POST http://localhost:8000/v1/expense/executions -d '{\"amount\":1200}'"
+
 scorecard-check:
-	python scripts/scorecard.py 2>/dev/null || echo "scorecard not yet (F11)"
+	python scripts/scorecard.py
+
+release-dry-run:
+	@echo "== release dry-run v1.0.0 =="
+	python tools/openapi_lint.py --check
+	pytest -q
+	python -m procurement_platform.evals.runner --mode direct --suite all --gate --baseline evals/reports/baseline_v2.json
+	python scripts/scorecard.py
+	@echo "CHANGELOG.md ## [1.0.0] present:" && grep -q "## \[1.0.0\]" CHANGELOG.md && echo "ok"
+	@echo "docs/api/README.md present:" && grep -q "33 paths" docs/api/README.md && echo "ok"
+	@echo "CONTRIBUTING.md <10 min:" && grep -q "Quickstart" CONTRIBUTING.md && echo "ok"
+	@echo "release dry-run PASSED"

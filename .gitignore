@@ -31,7 +31,9 @@ infra/terraform/*.tfstate.backup
 # GCS / BigQuery local
 .artifacts/
 artifacts/
-reports/
+reports/*
+!reports/scorecard.md
+!reports/.gitkeep
 sbom.json
 
 # pytest

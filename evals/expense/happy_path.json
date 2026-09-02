@@ -1,0 +1,26 @@
+{
+  "case_id": "expense_happy_001",
+  "description": "Expense happy path via platform core — reuses gateway, approvals, audit",
+  "input": {
+    "request_id": "req_exp_001",
+    "tenant_id": "tenant_demo",
+    "requester_id": "user_01",
+    "amount": 1200,
+    "currency": "USD",
+    "reason": "viaje cliente Q1",
+    "source": "test"
+  },
+  "fixtures": {
+    "policies": ["fixture://expense/budget_v1"]
+  },
+  "expected": {
+    "terminal_state": "COMPLETED",
+    "must_not_call": [],
+    "must_call": [],
+    "required_events": ["proposal.drafted", "approval.requested", "execution.completed"],
+    "policy_decisions": ["pass"],
+    "max_latency_s": 5
+  },
+  "tags": ["expense", "happy", "domain"],
+  "seed": 42
+}

@@ -2,6 +2,28 @@
 
 Todas las cambios notables de la API se documentan aquí. Formato basado en Keep a Changelog y versionado semántico.
 
+## [1.0.0] - 2026-09-02 — Fase 11 Ecosistema OSS 1.0
+
+### Added
+- `POST /v1/expense/executions` — expense workflow 8 nodos `amount, currency, reason` → `AWAITING_APPROVAL` → `COMPLETED` reusa platform `gateway, approvals, audit` (code_shared 79%)
+- `GET /v1/expense/executions/{id}` — detalle expense con `proposal.amount` + `approval_request`
+- `GET /v1/expense/executions?tenant_id&limit` — lista expense filtrada por `proposal.amount`
+- `POST /v1/secrets/{id}/rotate` — rotation audit `secret.rotation` (admin, workload identity)
+- `GET /v1/secrets/rotation/status` — verifica WIF (no key file)
+- Platform core `src/procurement_platform/platform/{workflow,gateway,approvals,audit,rag,llm,tools,evals}` — generic >70% shared
+- Plugin registry `platform/tools/registry.py` entry_points `procurement.tools` + `tools/builtin/calculate_shortage.py`
+- Scorecard `scripts/scorecard.py` → `reports/scorecard.md` + `make scorecard-check` gate
+- Docs OSS `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `.github/ISSUE_TEMPLATE/*`, `docs/api/README.md 33 paths`
+
+### Changed
+- `POST /v1/approvals/{id}/decision` ahora soporta expense (detecta `amount` vs `supplier_id`, delega a `expense_orchestrator` con 2 approvals si `risk high`)
+- `pyproject.toml` entry_points `procurement.tools`
+
+### Compatibility
+- No breaking change vs `0.1.0` — solo adiciones backward compatible (`/v1/expense/*`, `/v1/secrets/*`)
+
+---
+
 ## [0.1.0] - 2026-09-02 — Fase 8 API Platform
 
 ### Added

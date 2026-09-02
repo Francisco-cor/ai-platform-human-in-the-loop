@@ -4,7 +4,9 @@ Plataforma independiente de **Agent Station** para ejecutar workflows multi-etap
 
 > **Boundary:** Agent Station es sistema externo. Comunicación exclusivamente por APIs versionadas (`/v1`) y eventos. Ver `docs/architecture/boundary-agent-station.md`.
 
-## Estado actual — Fase 0–10 completadas (2026-09-02)
+## Estado actual — Fase 0–11 completadas (2026-09-02) — v1.0.0 OSS
+
+![scorecard](reports/scorecard.md) **code_shared 79%** | **329 tests** | **22+1 casos eval 100%** | **Spectral 0** | **P99 <1s**
 
 | Fase | Objetivo | Estado | Criterio de salida verificado |
 |------|----------|--------|-------------------------------|
@@ -19,10 +21,26 @@ Plataforma independiente de **Agent Station** para ejecutar workflows multi-etap
 | 8 — API Platform, DX e integraciones | SDK py/ts, webhooks, paginación, OpenAPI lint | ✅ | `pip install procurement-sdk-py` crea/aprueba sin curl, webhook `execution.completed` HMAC <5s, `openapi.json` Spectral 0, paginación `total_count/has_more` estable, `docs/api/postman_collection.json`; 285+ tests |
 | 9 — Data platform y analytics | Outbox→BQ, lineage, time-travel, feature flags, retention | ✅ | `POST /v1/bq/drain` → `bq_audit` en <5s sin PII, `GET /v1/lineage?document_id=...` lineage, `GET .../time-travel?at=...` snapshot, `flags.yaml` hot-reload, `DELETE /v1/tenants/{id}/data` tombstone; 298+ tests |
 | 10 — Cloud native, GitOps y SRE | Terraform modules, Cloud Run canary, migrate job, backups, chaos | ✅ | `terraform validate` staging+prod, `gcloud run deploy --traffic 90:stable,10:canary` + `curl /readyz`, `alembic upgrade head` Job + pgbouncer, `backup.sh restore-drill` + 7 runbooks SLO 99.9% p95<1s; 310+ tests |
+| 11 — Ecosistema extensible y OSS 1.0 | Platform core, plugin registry, expense workflow, scorecard, release | ✅ | `POST /v1/expense/executions {amount:1200}` → `AWAITING→COMPLETED` reusa 79% `platform`, `scripts/scorecard.py` PASS, `CONTRIBUTING.md` <10 min; 329+ tests |
 
-Siguientes fases: ver `PLAN_ELEVACION_11_FASES.md` §4 y `PLAN_IMPLEMENTACION.md` §19.
+> **Why not a chatbot?** Esta plataforma demuestra ingeniería de agentes: workflows multi-etapa con estado durable, tool gateway con allowlist/budgets/idempotencia, RAG seguro con quarantine, human-in-the-loop con snapshot/scope_hash, evaluación offline 22 casos, audit trail con trace_id, BigQuery lineage, GitOps canary y 2º dominio en <1 día con >70% código compartido — no es solo prompt→respuesta.
 
-## Quickstart local (sin GCP)
+Siguientes iteraciones: ver `CHANGELOG.md` `## [1.0.0]` y `PLAN_ELEVACION_11_FASES.md` §4.
+
+## Try in 5 min (sin GCP) — Fase 11
+
+```bash
+git clone <repo> && cd ai-platform-human-in-the-loop
+pip install -e ".[dev]" && pip install -e sdk/python
+docker compose up --build -d && curl http://localhost:8000/healthz
+pytest -q  # 329 tests
+python examples/sdk_happy.py  # procurement happy
+curl -X POST http://localhost:8000/v1/expense/executions -H "Content-Type: application/json" -d '{"tenant_id":"tenant_demo","requester_id":"user_01","amount":1200,"currency":"USD","reason":"viaje"}'
+# → {"status":"AWAITING_APPROVAL","approval_request":{"required_approvals":2}}; aprobar 2 veces → COMPLETED reusa platform
+python scripts/scorecard.py  # 79% shared PASS
+```
+
+## Quickstart local (sin GCP) — detallado
 
 ```bash
 # 1. Instalar
@@ -53,10 +71,12 @@ curl -X POST http://localhost:8000/v1/webhooks/subscriptions -H "Content-Type: a
   -d '{"tenant_id":"tenant_demo","url":"http://webhook.site/test","secret":"secret123","events":["execution.completed"]}'
 # al completar, webhook recibe HMAC sha256 + X-Webhook-Id
 
-# 7. Evaluar + RAG + matrix
+# 7. Evaluar + RAG + matrix + cross-domain
 python -m procurement_platform.evals.runner --mode direct --suite all  # 22/22
 python -m procurement_platform.evals.rag_eval  # 50/50 precision 1.0
 python -m procurement_platform.evals.llm_matrix --providers fake gemini deepseek
+make eval-all-domains  # procurement 22/22 + expense 1/1
+make scorecard-check  # 79% shared
 ```
 
 Sin Docker (SQLite + tests + SDK mock):

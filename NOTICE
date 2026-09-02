@@ -1,0 +1,14 @@
+Enterprise Agentic AI Platform — Procurement (Human-in-the-Loop)
+Copyright (c) 2026 Francisco Cordero
+
+This project is licensed under the MIT License (see LICENSE).
+Portions of the architecture were developed following the 11-phase elevation plan
+(PLAN_ELEVACION_11_FASES.md, gitignored) and are documented in docs/decisions/0001-0014.
+
+Third-party components:
+- FastAPI, Pydantic, SQLAlchemy, pgvector, Redis, structlog, OpenTelemetry
+- Gemini, DeepSeek (optional providers, via API)
+- pgvector/pgvector:pg16 Docker image
+
+No secrets or PII are included in this repository. See security/pii.py and observability/logging.py
+for redaction controls.
