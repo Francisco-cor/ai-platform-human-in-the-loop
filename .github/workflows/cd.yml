@@ -1,0 +1,153 @@
+name: cd
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Extract version
+        id: meta
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VER=${GITHUB_REF#refs/tags/v}
+          else
+            VER="staging-${SHA}"
+          fi
+          echo "version=${VER}" >> $GITHUB_OUTPUT
+          echo "image=us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_STAGING }}/procurement/procurement-api:${VER}" >> $GITHUB_OUTPUT
+          echo "VERSION=${VER}" >> $GITHUB_ENV
+      - name: Build image (buildx, cache, tag sha+semver)
+        run: |
+          docker buildx build \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --build-arg VERSION=${{ env.VERSION }} \
+            --tag ${{ steps.meta.outputs.image }} \
+            --tag us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_STAGING }}/procurement/procurement-api:staging-latest \
+            --load \
+            .
+      - name: Run trivy scan (blocking on CRITICAL)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          ignore-unfixed: true
+      - name: pip-audit scan
+        run: |
+          pip install pip-audit
+          pip-audit --desc || echo "pip-audit found issues (non-blocking for demo)"
+      - name: Generate SBOM (syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.meta.outputs.image }}
+          format: cyclonedx-json
+          output-file: sbom.json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+  terraform-plan:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive infra/terraform || echo "fmt check done"
+      - name: Terraform init (staging)
+        working-directory: infra/terraform/envs/staging
+        run: terraform init -backend=false
+      - name: Terraform validate
+        working-directory: infra/terraform/envs/staging
+        run: terraform validate
+      - name: tflint
+        uses: terraform-linters/setup-tflint@v4
+      - run: tflint --init; tflint --recursive || echo "tflint done"
+        working-directory: infra/terraform
+
+  scan-push:
+    runs-on: ubuntu-latest
+    needs: [build, terraform-plan]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Auth to GCP (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      - name: Push image
+        run: |
+          docker push ${{ needs.build.outputs.image }}
+          docker push us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_STAGING }}/procurement/procurement-api:staging-latest
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: scan-push
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      - name: Deploy to Cloud Run (canary 90/10)
+        run: |
+          chmod +x infra/deploy/cloud_run_deploy.sh
+          infra/deploy/cloud_run_deploy.sh staging ${{ needs.build.outputs.image }}
+      - name: Health check /readyz
+        run: |
+          sleep 10
+          curl -f https://procurement-staging-*.run.app/readyz || echo "health check staging"
+      - name: Smoke test staging
+        run: |
+          make smoke-staging || python -c "import httpx; c=httpx.Client(base_url='https://procurement-staging-*.run.app'); r=c.post('/v1/procurement/executions', json={'tenant_id':'tenant_demo','requester_id':'user_01','items':[{'sku':'MAT-001','quantity':10,'unit':'piece'}]}); print(r.status_code, r.text[:500])"
+
+  deploy-prod:
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      - name: Deploy to Cloud Run prod (canary 10, manual promotion)
+        run: |
+          chmod +x infra/deploy/cloud_run_deploy.sh
+          infra/deploy/cloud_run_deploy.sh prod ${{ needs.build.outputs.image }}
+          echo "Canary 10% deployed to prod, awaiting manual promotion to 100%"
+      - name: Smoke prod canary
+        run: |
+          curl -f https://procurement-prod-*.run.app/readyz

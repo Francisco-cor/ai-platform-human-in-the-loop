@@ -30,7 +30,9 @@ infra/terraform/*.tfstate.backup
 
 # GCS / BigQuery local
 .artifacts/
+artifacts/
 reports/
+sbom.json
 
 # pytest
 .pytest_cache/

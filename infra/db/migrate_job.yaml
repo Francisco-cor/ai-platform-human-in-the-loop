@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: procurement-migrate
+  namespace: procurement
+  labels:
+    app: procurement
+    job: migrate
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      serviceAccountName: procurement-migrate
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: us-central1-docker.pkg.dev/procurement-platform-staging/procurement/procurement-api:staging-latest
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: PROCUREMENT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: procurement-db-url
+                  key: url
+            - name: PGSSLCERT
+              value: "/etc/ssl/certs/ca-certificates.crt"
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /etc/ssl/certs
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+      volumes:
+        - name: ssl-certs
+          secret:
+            secretName: gcp-sql-ssl
+      # Workload Identity is used; no key file
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: procurement-migrate
+  namespace: procurement
+  annotations:
+    iam.gke.io/gcp-service-account: procurement-api@procurement-platform-staging.iam.gserviceaccount.com
+---
+# Cloud Run Job alternative (if using Cloud Run Jobs instead of GKE)
+# gcloud run jobs create procurement-migrate --image ... --set-env-vars PROCUREMENT_DATABASE_URL=... --execute-now

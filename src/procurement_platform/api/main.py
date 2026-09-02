@@ -1935,6 +1935,44 @@ def rag_feedback_stats(
 
 
 # ---------------------------------------------------------------------------
+# Fase 10 — Secrets rotation + workload identity (no key file)
+# ---------------------------------------------------------------------------
+@app.post("/v1/secrets/{secret_id}/rotate", tags=["ops"])
+def rotate_secret(
+    secret_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Manual rotation trigger (admin) — emite audit secret.rotation con workload_identity."""
+    # RBAC: admin only
+    if principal and principal.auth_method != "anonymous":
+        from procurement_platform.security.rbac import has_role
+
+        if not has_role(principal, "admin"):
+            raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "admin required"})
+    from procurement_platform.security.secrets_rotation import emit_secret_rotation_audit
+
+    result = emit_secret_rotation_audit(
+        db, secret_id=secret_id, actor_id=principal.sub if principal.auth_method != "anonymous" else "system", trace_id=request.state.trace_id
+    )
+    return result
+
+
+@app.get("/v1/secrets/rotation/status", tags=["ops"])
+def secrets_status():
+    """Verifica workload identity (no key file) y rotation config."""
+    from procurement_platform.security.secrets_rotation import is_workload_identity_enabled
+
+    return {
+        "workload_identity": is_workload_identity_enabled(),
+        "rotation_days": 30,
+        "key_file_used": not is_workload_identity_enabled(),
+        "message": "Workload Identity (no key file) enabled" if is_workload_identity_enabled() else "Key file detected — should use WIF",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Error handlers — formato estándar {code, message, request_id, details}
 # ---------------------------------------------------------------------------
 @app.exception_handler(HTTPException)

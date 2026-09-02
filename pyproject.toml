@@ -89,6 +89,10 @@ check_untyped_defs = false
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+markers = [
+  "chaos: marks tests as chaos (deselect with '-m \"not chaos\"')",
+  "slow: marks tests as slow",
+]
 
 [tool.alembic]
 script_location = "migrations"

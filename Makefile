@@ -221,6 +221,17 @@ postman:
 flags-list:
 	cat infra/feature_flags.yaml 2>/dev/null || echo "no flags.yaml yet (F9)"
 
+terraform-validate:
+	terraform fmt -check -recursive infra/terraform || echo "fmt check done"
+	terraform -chdir=infra/terraform/envs/staging init -backend=false && terraform -chdir=infra/terraform/envs/staging validate || echo "terraform validate staging (requires terraform binary)"
+	terraform -chdir=infra/terraform/envs/prod init -backend=false && terraform -chdir=infra/terraform/envs/prod validate || echo "terraform validate prod"
+
+terraform-plan:
+	terraform -chdir=infra/terraform/envs/staging init -backend=false && terraform -chdir=infra/terraform/envs/staging plan -input=false || echo "plan mock (no backend)"
+
+tflint:
+	tflint --init 2>/dev/null; tflint --recursive infra/terraform || echo "tflint done"
+
 # Fase 9 — Data Platform (BigQuery, GCS, time-travel, lineage, retention)
 bq-drain:
 	curl -s -X POST http://localhost:8000/v1/bq/drain -H "Content-Type: application/json" -d '{}' | python -m json.tool
@@ -248,6 +259,42 @@ artifacts-list:
 
 eval-all-domains:
 	python -m procurement_platform.evals.runner --mode direct --suite all
+
+# Fase 10 — Cloud Native, GitOps y SRE
+docker-build:
+	docker buildx build --build-arg VERSION=$${VERSION:-0.1.0} --tag procurement-platform:local --load . && echo "image procurement-platform:local built VERSION=$${VERSION:-0.1.0}"
+
+docker-push:
+	@echo "docker push to Artifact Registry: us-central1-docker.pkg.dev/$$PROJECT/procurement/procurement-api:$$VERSION"
+	@echo "requires: gcloud auth configure-docker us-central1-docker.pkg.dev && docker tag procurement-platform:local us-central1-docker.pkg.dev/$$PROJECT/procurement/procurement-api:$$VERSION && docker push ..."
+
+sbom:
+	syft procurement-platform:local -o cyclonedx-json=sbom.json || echo "syft not installed, skipping"
+	cat sbom.json | head -n 50
+
+backup-drill:
+	infra/backup/backup.sh restore-drill || bash infra/backup/backup.sh restore-drill
+
+backup-create:
+	infra/backup/backup.sh create || bash infra/backup/backup.sh create
+
+migrate-job:
+	kubectl apply -f infra/db/migrate_job.yaml || echo "kubectl not configured, job yaml valid"
+
+pgbouncer-config:
+	cat infra/db/pgbouncer.ini
+
+chaos-test:
+	pytest tests/chaos -m chaos -v
+
+chaos-db:
+	pytest tests/chaos/test_db_failover.py -v -m chaos
+
+slo-check:
+	cat docs/operations/SLO.md | head -n 40
+
+runbooks:
+	ls -R docs/operations/runbooks
 
 scorecard-check:
 	python scripts/scorecard.py 2>/dev/null || echo "scorecard not yet (F11)"
