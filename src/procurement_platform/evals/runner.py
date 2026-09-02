@@ -103,6 +103,16 @@ def _save_report(report: dict[str, Any], output_path: Path | None) -> tuple[Path
         latest_md.write_text(md_path.read_text(encoding="utf-8"), encoding="utf-8")
     except Exception:
         pass
+    # Fase 9 — GCS artifact store (trace, report, docs) — guarda también en GCS si bucket configurado
+    try:
+        from procurement_platform.infra.gcs import get_artifact_store
+
+        store = get_artifact_store()
+        # Solo si bucket es gs:// o file:// distinto de default, pero siempre guarda para dev
+        store.put(f"evals/{output_path.name}", output_path.read_bytes())
+        store.put(f"evals/{md_path.name}", md_path.read_bytes())
+    except Exception:
+        pass
     return output_path, md_path
 
 

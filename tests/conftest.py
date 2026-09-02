@@ -203,6 +203,53 @@ def _reset_gateway_global():
         clear_delegations()
     except Exception:
         pass
+    # Fase 9: clear BQ fake, artifact store, tombstones, flags, webhooks
+    try:
+        from procurement_platform.pipeline.bq_drainer import clear_fake_bq
+
+        clear_fake_bq()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.infra.gcs import reset_artifact_store
+
+        reset_artifact_store()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.persistence.retention import clear_tombstones
+
+        clear_tombstones()
+        from procurement_platform.persistence.database import get_sessionmaker
+        from procurement_platform.persistence.models import AuditEventRow
+
+        SessionLocal = get_sessionmaker()
+        _db = SessionLocal()
+        _db.query(AuditEventRow).filter(AuditEventRow.event_type == "tenant.data_soft_deleted").delete()
+        _db.commit()
+        _db.close()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.infra.feature_flags import reset_flag_provider
+
+        reset_flag_provider()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.integrations.webhooks.service import reset_webhook_service
+
+        reset_webhook_service()
+    except Exception:
+        pass
+    try:
+        import os as _os2
+
+        _os2.environ.pop("PROCUREMENT_GCS_BUCKET", None)
+        _os2.environ.pop("PROCUREMENT_BIGQUERY_DATASET", None)
+        _os2.environ.pop("PROCUREMENT_RETENTION_DAYS", None)
+    except Exception:
+        pass
     yield
     try:
         from procurement_platform.infra.locks.manager import reset_lock_manager
@@ -232,6 +279,36 @@ def _reset_gateway_global():
         from procurement_platform.approvals.service import clear_delegations
 
         clear_delegations()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.pipeline.bq_drainer import clear_fake_bq
+
+        clear_fake_bq()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.infra.gcs import reset_artifact_store
+
+        reset_artifact_store()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.persistence.retention import clear_tombstones
+
+        clear_tombstones()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.infra.feature_flags import reset_flag_provider
+
+        reset_flag_provider()
+    except Exception:
+        pass
+    try:
+        from procurement_platform.integrations.webhooks.service import reset_webhook_service
+
+        reset_webhook_service()
     except Exception:
         pass
 

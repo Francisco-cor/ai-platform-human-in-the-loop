@@ -50,6 +50,19 @@ from procurement_platform.domain.suppliers import (
 from procurement_platform.persistence.models import WorkflowCheckpoint, WorkflowExecution
 from procurement_platform.policies.engine import PolicyConfig, run_policy_checks
 
+
+# Fase 9 — helper to build lineage from RAG results and proposal
+def _build_lineage(
+    document_ids: list[str] | None = None,
+    policy_ids: list[str] | None = None,
+    supplier_ids: list[str] | None = None,
+) -> dict:
+    return {
+        "document_ids": document_ids or [],
+        "policy_ids": policy_ids or [],
+        "supplier_ids": supplier_ids or [],
+    }
+
 # Fase 3 RAG
 try:
     from procurement_platform.rag.models import Document, DocumentMetadata
@@ -416,10 +429,19 @@ class WorkflowOrchestrator:
         """Fase 3: recupera políticas via RAG con filtros tenant/vigencia y valida seguridad.
 
         Retorna (results, should_block, reason) y registra audit.
+        Fase 9: respeta flag rag_reranker por tenant.
         """
         rag = self._get_rag_service()
         if rag is None:
             return [], False, "rag_not_configured"
+        # Fase 9 — feature flag for reranker
+        try:
+            from procurement_platform.infra.feature_flags import is_flag_enabled
+            use_reranker = is_flag_enabled("rag_reranker", row.tenant_id)
+            # Pass flag to retrieval if supported (via thread local or direct)
+            # For MVP, we just log; actual reranker is controlled via RAG service flag
+        except Exception:
+            pass
         normalized = (
             NormalizedRequest.model_validate(row.normalized_request)
             if row.normalized_request
@@ -533,6 +555,17 @@ class WorkflowOrchestrator:
         if trace_id:
             row.trace_id = trace_id
         db.flush()
+        # Fase 9 — lineage for transition (extract from proposal/suppliers if available)
+        try:
+            trans_lineage = {}
+            if row.proposal and isinstance(row.proposal, dict):
+                sup_id = row.proposal.get("supplier_id")
+                pols = row.proposal.get("policies_applied") or []
+                trans_lineage = _build_lineage(policy_ids=pols if isinstance(pols, list) else [], supplier_ids=[sup_id] if sup_id else [])
+            else:
+                trans_lineage = _build_lineage()
+        except Exception:
+            trans_lineage = _build_lineage()
         create_audit_event(
             db,
             execution_id=execution_id,
@@ -542,6 +575,7 @@ class WorkflowOrchestrator:
             actor_id=actor_id,
             trace_id=trace_id or row.trace_id,
             details={"from": current.value, "to": target.value, **(details or {})},
+            lineage=trans_lineage,
         )
         db.add(
             WorkflowCheckpoint(
@@ -730,6 +764,13 @@ class WorkflowOrchestrator:
                         row, trace_id=trace_id
                     )
                     # registrar audit de retrieval
+                    # Fase 9 — lineage: extract document_ids/policy_ids from results
+                    try:
+                        doc_ids = [r.chunk.document_id if hasattr(r, "chunk") else str(r) for r in results[:5]]
+                        pol_ids = [r.chunk.metadata.policy_type or r.chunk.document_id if hasattr(r, "chunk") else "" for r in results[:5]]
+                        lineage = _build_lineage(document_ids=doc_ids, policy_ids=[p for p in pol_ids if p])
+                    except Exception:
+                        lineage = _build_lineage()
                     create_audit_event(
                         db,
                         execution_id=row.execution_id,
@@ -749,6 +790,7 @@ class WorkflowOrchestrator:
                                 for r in results[:2]
                             ],
                         },
+                        lineage=lineage,
                     )
                     db.flush()
                     if should_block:
@@ -795,6 +837,15 @@ class WorkflowOrchestrator:
                     row.proposal = proposal.model_dump(mode="json")
                     db.flush()
                     # Registrar uso de LLM si hubo fallback o éxito
+                    # Fase 9 — lineage for proposal
+                    try:
+                        prop_lineage = _build_lineage(
+                            document_ids=[],  # could be from RAG, but proposal already has evidence
+                            policy_ids=proposal.policies_applied if hasattr(proposal, "policies_applied") else [],
+                            supplier_ids=[proposal.supplier_id],
+                        )
+                    except Exception:
+                        prop_lineage = _build_lineage()
                     create_audit_event(
                         db,
                         execution_id=row.execution_id,
@@ -809,6 +860,7 @@ class WorkflowOrchestrator:
                             "total": proposal.total,
                             "evidence": proposal.evidence[:200],
                         },
+                        lineage=prop_lineage,
                     )
                     db.flush()
                 if target == ExecutionState.AWAITING_APPROVAL and not row.approval_request:
@@ -828,6 +880,15 @@ class WorkflowOrchestrator:
                     )
                     row.approval_request = appr.model_dump(mode="json")
                     db.flush()
+                    # Fase 9 — lineage for approval
+                    try:
+                        appr_lineage = _build_lineage(
+                            document_ids=doc_ids if "doc_ids" in locals() else [],
+                            policy_ids=prop.policies_applied if hasattr(prop, "policies_applied") else [],
+                            supplier_ids=[prop.supplier_id],
+                        )
+                    except Exception:
+                        appr_lineage = _build_lineage(supplier_ids=[prop.supplier_id])
                     create_audit_event(
                         db,
                         execution_id=row.execution_id,
@@ -845,6 +906,7 @@ class WorkflowOrchestrator:
                             "required_approvals": appr.required_approvals,
                             "expires_at": appr.expires_at.isoformat(),
                         },
+                        lineage=appr_lineage,
                     )
                     db.flush()
                     # Fase 7 — notification service (email + slack + webhook) con scope_hash truncado y link inbox

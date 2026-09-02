@@ -34,6 +34,7 @@ def create_audit_event(
     span_id: str | None = None,
     duration_ms: int | None = None,
     details: dict | None = None,
+    lineage: dict | None = None,
 ) -> AuditEvent:
     # F5-3: auto-correlate trace_id/span_id from OTEL if not provided
     if not trace_id or not span_id:
@@ -91,6 +92,18 @@ def create_audit_event(
             details["duration_ms"] = duration_ms
         if span_id:
             details["span_id"] = span_id
+    # Fase 9 — lineage (execution → doc → policy → supplier)
+    if lineage:
+        details = dict(details or {})
+        # ensure lineage has standard keys
+        details["lineage"] = {
+            "document_ids": lineage.get("document_ids", []),
+            "policy_ids": lineage.get("policy_ids", []),
+            "supplier_ids": lineage.get("supplier_ids", []),
+            "execution_id": execution_id,
+        }
+        # also store top-level for easy query (if needed, duplicate)
+        # keep original lineage for BigQuery view procurement_lineage
     # Fase 7: redactar PII en details antes de persistir
     try:
         if details:

@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     # Auth (F3-1)
     jwt_secret: str | None = Field(default=None, alias="PROCUREMENT_JWT_SECRET")
 
+    # Fase 9 — Data Platform (BigQuery, GCS, retention)
+    retention_days: int = Field(default=365, alias="PROCUREMENT_RETENTION_DAYS")
+    retention_enabled: bool = Field(default=True, alias="PROCUREMENT_RETENTION_ENABLED")
+
     # Fase 6 — LLMOps per-tenant token budgets y model allowlist
     # JSON env var example: PROCUREMENT_TENANT_LLM_CONFIG='{"tenant_demo":{"models":["gemini","fake"],"max_tokens":8000}}'
     tenant_llm_config_raw: str | None = Field(

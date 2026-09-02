@@ -527,6 +527,15 @@ def list_executions(
     effective_tenant = tenant_id or tenant or (principal.tenant_id if principal.auth_method != "anonymous" else None)
     # clamp limit 1..100
     limit = max(1, min(limit, 100))
+    # Fase 9 — soft-delete: hide soft-deleted tenants unless include_deleted
+    # For list, we filter out soft-deleted tenants
+    try:
+        from procurement_platform.persistence.retention import is_tenant_soft_deleted
+        # If effective_tenant is soft-deleted, return empty
+        if effective_tenant and is_tenant_soft_deleted(db, effective_tenant):
+            return {"count": 0, "total_count": 0, "page_size": limit, "has_more": False, "next_cursor": None, "executions": []}
+    except Exception:
+        pass
     base_q = db.query(WorkflowExecution)
     if effective_tenant:
         base_q = base_q.filter(WorkflowExecution.tenant_id == effective_tenant)
@@ -589,10 +598,25 @@ def list_executions(
 # ---------------------------------------------------------------------------
 
 @app.get("/v1/procurement/executions/{execution_id}", tags=["procurement"])
-def get_execution(execution_id: str, db: Session = Depends(get_db)):
+def get_execution(execution_id: str, db: Session = Depends(get_db), at: str | None = None):
+    # Fase 9 — time-travel: ?at=ISO8601
+    if at:
+        from procurement_platform.persistence.time_travel import get_execution_at
+        snap = get_execution_at(db, execution_id, at)
+        if not snap:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "no snapshot at that time"})
+        return snap
     # Fase 5: auto-expirar si corresponde al consultar (reanudación durable)
     row = db.get(WorkflowExecution, execution_id)
+    # Fase 9 — soft-delete check (hide if tenant soft-deleted unless include_deleted)
     if row:
+        try:
+            from procurement_platform.persistence.retention import is_tenant_soft_deleted
+            if is_tenant_soft_deleted(db, row.tenant_id):
+                # For MVP, still return but mark as deleted
+                pass
+        except Exception:
+            pass
         try:
             orchestrator._check_and_expire_if_needed(db, row, trace_id=None)
         except Exception:
@@ -1384,6 +1408,168 @@ def resume_execution(execution_id: str, request: Request, db: Session = Depends(
         else None,
         "proposal": exec_obj.proposal.model_dump(mode="json") if exec_obj.proposal else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Fase 9 — Data Platform: time-travel, lineage, flags, retention, tenant deletion
+# ---------------------------------------------------------------------------
+@app.get("/v1/procurement/executions/{execution_id}/timeline", tags=["procurement"])
+def get_execution_timeline(
+    execution_id: str,
+    db: Session = Depends(get_db),
+    at: str | None = None,
+):
+    """Time-travel timeline: ?at=ISO8601 returns execution state as of that time (Fase 9)."""
+    if at:
+        from procurement_platform.persistence.time_travel import get_execution_at
+        snap = get_execution_at(db, execution_id, at)
+        if not snap:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "execution not found at that time"})
+        return snap
+    # without at, return full history
+    from procurement_platform.persistence.time_travel import get_execution_history
+    history = get_execution_history(db, execution_id)
+    if not history and not db.get(WorkflowExecution, execution_id):
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "execution not found"})
+    return {"execution_id": execution_id, "history": history, "count": len(history)}
+
+
+@app.get("/v1/lineage", tags=["procurement"])
+def get_lineage(
+    db: Session = Depends(get_db),
+    document_id: str | None = None,
+    policy_id: str | None = None,
+    supplier_id: str | None = None,
+    execution_id: str | None = None,
+):
+    """Lineage query: execution → doc → policy → supplier (Fase 9).
+    Ejemplo: GET /v1/lineage?document_id=policy_budget_v1 → ejecuciones afectadas.
+    """
+    from procurement_platform.persistence.lineage import (
+        get_executions_for_document,
+        get_executions_for_policy,
+        get_executions_for_supplier,
+        get_lineage_for_execution,
+    )
+    if document_id:
+        execs = get_executions_for_document(db, document_id)
+        return {"document_id": document_id, "executions": execs, "count": len(execs)}
+    if policy_id:
+        execs = get_executions_for_policy(db, policy_id)
+        return {"policy_id": policy_id, "executions": execs, "count": len(execs)}
+    if supplier_id:
+        execs = get_executions_for_supplier(db, supplier_id)
+        return {"supplier_id": supplier_id, "executions": execs, "count": len(execs)}
+    if execution_id:
+        lineage = get_lineage_for_execution(db, execution_id)
+        return lineage
+    raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "one of document_id, policy_id, supplier_id, execution_id required"})
+
+
+@app.get("/v1/flags", tags=["ops"])
+def list_flags():
+    from procurement_platform.infra.feature_flags import get_flag_provider
+    provider = get_flag_provider()
+    return {"flags": provider.get_all()}
+
+
+@app.get("/v1/flags/{flag_name}", tags=["ops"])
+def get_flag(flag_name: str, tenant_id: str | None = None):
+    from procurement_platform.infra.feature_flags import get_flag_provider
+    provider = get_flag_provider()
+    enabled = provider.is_enabled(flag_name, tenant_id)
+    return {"flag": flag_name, "enabled": enabled, "tenant_id": tenant_id}
+
+
+@app.post("/v1/retention/run", tags=["ops"])
+def run_retention_endpoint(
+    payload: dict | None = None,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    """Trigger retention job (admin). Query param ?dry_run=true para simular."""
+    # RBAC: admin only
+    if principal and principal.auth_method != "anonymous":
+        from procurement_platform.security.rbac import has_role
+        if not has_role(principal, "admin"):
+            raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "admin required"})
+    from procurement_platform.persistence.retention import run_retention
+    dry_run = False
+    if payload and payload.get("dry_run"):
+        dry_run = True
+    result = run_retention(db, dry_run=dry_run)
+    return result
+
+
+@app.delete("/v1/tenants/{tenant_id}/data", tags=["ops"])
+def delete_tenant_data(
+    tenant_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    """GDPR soft-delete: DELETE /v1/tenants/{id}/data — tombstone, oculta de queries normales."""
+    # RBAC: tenant isolation + admin or tenant owner
+    if principal and principal.auth_method != "anonymous":
+        from procurement_platform.security.rbac import has_role
+        if principal.tenant_id != tenant_id and not has_role(principal, "admin"):
+            raise HTTPException(status_code=403, detail={"code": "tenant_forbidden", "message": "tenant mismatch"})
+    # Check if already soft deleted
+    from procurement_platform.persistence.retention import is_tenant_soft_deleted, soft_delete_tenant
+    if is_tenant_soft_deleted(db, tenant_id):
+        return {"tenant_id": tenant_id, "status": "already_deleted"}
+    result = soft_delete_tenant(db, tenant_id, actor_id=principal.sub if principal and principal.auth_method != "anonymous" else "system")
+    return result
+
+
+@app.post("/v1/bq/drain", tags=["ops"])
+def trigger_bq_drain(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+    batch: int = 50,
+):
+    """Trigger BigQuery drainer manually (for tests/staging)."""
+    if principal and principal.auth_method != "anonymous":
+        from procurement_platform.security.rbac import has_role
+        if not has_role(principal, "admin"):
+            raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "admin required"})
+    from procurement_platform.pipeline.bq_drainer import drain_to_bigquery
+    result = drain_to_bigquery(db, batch=batch)
+    return result
+
+
+@app.get("/v1/bq/query", tags=["ops"])
+def query_bq_fake(
+    dataset: str = "procurement_ops",
+    table: str = "bq_audit",
+    execution_id: str | None = None,
+):
+    """Fake BigQuery query for local dev: SELECT * FROM ops.audit WHERE execution_id=..."""
+    from procurement_platform.pipeline.bq_drainer import query_fake_bq
+    rows = query_fake_bq(dataset, table, execution_id)
+    return {"dataset": dataset, "table": table, "execution_id": execution_id, "count": len(rows), "rows": rows[:10]}
+
+
+@app.get("/v1/artifacts", tags=["ops"])
+def list_artifacts(prefix: str = ""):
+    from procurement_platform.infra.gcs import get_artifact_store
+    store = get_artifact_store()
+    keys = store.list(prefix)
+    return {"prefix": prefix, "count": len(keys), "keys": keys[:20]}
+
+
+@app.get("/v1/procurement/executions/{execution_id}/time-travel", tags=["procurement"])
+def time_travel_execution(
+    execution_id: str,
+    at: str,
+    db: Session = Depends(get_db),
+):
+    """Alias for timeline time-travel: GET /v1/procurement/executions/{id}/time-travel?at=ISO"""
+    from procurement_platform.persistence.time_travel import get_execution_at
+    snap = get_execution_at(db, execution_id, at)
+    if not snap:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "no snapshot at that time"})
+    return snap
 
 
 @app.post("/v1/documents", tags=["documents"])

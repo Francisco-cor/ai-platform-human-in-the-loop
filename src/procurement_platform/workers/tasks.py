@@ -100,3 +100,54 @@ def enqueue_workflow(execution_id: str, trace_id: str | None = None) -> bool:
         return True
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Fase 9 — Data Platform jobs (Bq drainer batch 10s, retention daily)
+# ---------------------------------------------------------------------------
+
+async def drain_bq_job(ctx, batch: int = 50) -> dict:
+    """Fase 9 — ARQ job cada 10s: drena outbox_events a BigQuery (fake en dev)."""
+    from procurement_platform.persistence.database import get_sessionmaker
+    from procurement_platform.pipeline.bq_drainer import drain_to_bigquery
+
+    SessionLocal = get_sessionmaker()
+    db = SessionLocal()
+    try:
+        result = drain_to_bigquery(db, batch=batch)
+        logger.info("drain_bq_job done", extra={"result": result})
+        return result
+    except Exception as e:
+        logger.exception("drain_bq_job failed", extra={"error": str(e)})
+        raise
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+async def drain_outbox_job(ctx, batch: int = 50) -> dict:
+    """Alias para drain_bq_job — compatibilidad F2 outbox drainer."""
+    return await drain_bq_job(ctx, batch=batch)
+
+
+async def retention_job(ctx, retention_days: int | None = None, dry_run: bool = False) -> dict:
+    """Fase 9 — job diario retención: borra audit_events > retention_days pero mantiene hashes."""
+    from procurement_platform.persistence.database import get_sessionmaker
+    from procurement_platform.persistence.retention import run_retention
+
+    SessionLocal = get_sessionmaker()
+    db = SessionLocal()
+    try:
+        result = run_retention(db, retention_days=retention_days, dry_run=dry_run)
+        logger.info("retention_job done", extra={"result": result})
+        return result
+    except Exception as e:
+        logger.exception("retention_job failed", extra={"error": str(e)})
+        raise
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass

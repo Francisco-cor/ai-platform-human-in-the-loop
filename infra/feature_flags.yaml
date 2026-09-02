@@ -1,0 +1,29 @@
+# Feature flags — Fase 9 Data Platform (Unleash-style local)
+# Cambia enabled sin deploy — orchestrator lee flags por tenant
+# make flags-list -> cat infra/feature_flags.yaml
+
+flags:
+  rag_reranker:
+    enabled: false
+    tenants: []
+  llm_cache:
+    enabled: true
+    tenants: []
+  async_workers:
+    enabled: false
+    tenants: []
+  ui_v2:
+    enabled: false
+    tenants: []
+  webhooks:
+    enabled: true
+    tenants: []
+  notifications:
+    enabled: true
+    tenants: []
+  bulk_approvals:
+    enabled: true
+    tenants: []
+  time_travel:
+    enabled: true
+    tenants: []

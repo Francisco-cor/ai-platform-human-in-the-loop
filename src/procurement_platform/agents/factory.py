@@ -99,7 +99,14 @@ class LLMFactory:
             pass
 
         # Fase 6 — cache check (tenant isolated, TTL 1h, key incluye prompt_version)
-        if settings.llm_cache_enabled:
+        # Fase 9 — also check feature flag llm_cache
+        try:
+            from procurement_platform.infra.feature_flags import is_flag_enabled
+
+            flag_enabled = is_flag_enabled("llm_cache", tenant_id)
+        except Exception:
+            flag_enabled = True
+        if settings.llm_cache_enabled and flag_enabled:
             try:
                 from procurement_platform.agents.cache import get_llm_cache
 

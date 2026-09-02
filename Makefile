@@ -221,5 +221,33 @@ postman:
 flags-list:
 	cat infra/feature_flags.yaml 2>/dev/null || echo "no flags.yaml yet (F9)"
 
+# Fase 9 — Data Platform (BigQuery, GCS, time-travel, lineage, retention)
+bq-drain:
+	curl -s -X POST http://localhost:8000/v1/bq/drain -H "Content-Type: application/json" -d '{}' | python -m json.tool
+
+bq-query:
+	curl -s "http://localhost:8000/v1/bq/query?dataset=procurement_ops&table=bq_audit&execution_id=$(EXEC_ID)" | python -m json.tool
+
+time-travel:
+	curl -s "http://localhost:8000/v1/procurement/executions/$(EXEC_ID)/time-travel?at=$(AT)" | python -m json.tool
+
+lineage-doc:
+	curl -s "http://localhost:8000/v1/lineage?document_id=$(DOC_ID)" | python -m json.tool
+
+lineage-exec:
+	curl -s "http://localhost:8000/v1/lineage?execution_id=$(EXEC_ID)" | python -m json.tool
+
+retention-dry:
+	curl -s -X POST http://localhost:8000/v1/retention/run -H "Content-Type: application/json" -d '{"dry_run": true}' | python -m json.tool
+
+retention-run:
+	curl -s -X POST http://localhost:8000/v1/retention/run -H "Content-Type: application/json" -d '{}' | python -m json.tool
+
+artifacts-list:
+	curl -s "http://localhost:8000/v1/artifacts?prefix=evals/" | python -m json.tool
+
+eval-all-domains:
+	python -m procurement_platform.evals.runner --mode direct --suite all
+
 scorecard-check:
 	python scripts/scorecard.py 2>/dev/null || echo "scorecard not yet (F11)"

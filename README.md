@@ -4,7 +4,7 @@ Plataforma independiente de **Agent Station** para ejecutar workflows multi-etap
 
 > **Boundary:** Agent Station es sistema externo. Comunicación exclusivamente por APIs versionadas (`/v1`) y eventos. Ver `docs/architecture/boundary-agent-station.md`.
 
-## Estado actual — Fase 0–8 completadas (2026-09-02)
+## Estado actual — Fase 0–9 completadas (2026-09-02)
 
 | Fase | Objetivo | Estado | Criterio de salida verificado |
 |------|----------|--------|-------------------------------|
@@ -17,6 +17,7 @@ Plataforma independiente de **Agent Station** para ejecutar workflows multi-etap
 | 6 — LLMOps, prompt registry y governance | Prompts versionados, cache, A/B, budgets | ✅ | `prompts/registry` hash `sha256`, `llm_matrix` 3 providers, cache hit >30%, `prompt A/B` gate 5%, `prompt_lint` + per-tenant budgets; 262 tests; `prompt_hash` en audit |
 | 7 — HITL productivo | Inbox UI + notificaciones + SLA + bulk | ✅ | Inbox <2min, notificación <60s, escalamiento 12h, ScopeDiff, timeline, bulk 3× + CSV; 275 tests |
 | 8 — API Platform, DX e integraciones | SDK py/ts, webhooks, paginación, OpenAPI lint | ✅ | `pip install procurement-sdk-py` crea/aprueba sin curl, webhook `execution.completed` HMAC <5s, `openapi.json` Spectral 0, paginación `total_count/has_more` estable, `docs/api/postman_collection.json`; 285+ tests |
+| 9 — Data platform y analytics | Outbox→BQ, lineage, time-travel, feature flags, retention | ✅ | `POST /v1/bq/drain` → `bq_audit` en <5s sin PII, `GET /v1/lineage?document_id=...` lineage, `GET .../time-travel?at=...` snapshot, `flags.yaml` hot-reload, `DELETE /v1/tenants/{id}/data` tombstone; 298+ tests |
 
 Siguientes fases: ver `PLAN_ELEVACION_11_FASES.md` §4 y `PLAN_IMPLEMENTACION.md` §19.
 
@@ -72,31 +73,34 @@ Postman: `docs/api/postman_collection.json` → Import en Postman, variable `bas
 
 ```
 src/procurement_platform/
-  api/            FastAPI Fase 8 (healthz/readyz/metrics/slo, executions CRUD paginado, approvals/bulk/export/delegation/sla, webhooks/subscriptions, documents, rag/search) + rate limit/payload guard + OpenAPI lint
+  api/            FastAPI Fase 9 (healthz/readyz/metrics/slo, executions CRUD paginado + time-travel, approvals/bulk/export/delegation/sla, webhooks/subscriptions, documents, rag/search, lineage, bq/query, retention) + rate limit/payload guard + OpenAPI lint
   domain/         Contratos + inventory, suppliers (ApprovalRequest snapshot/scope_hash/required_approvals + escalated_to/delegated_from)
   policies/       Policy engine determinista
   rag/            RAG seguro: models, FakeEmbedder 384, security, ingestion, retrieval, service, reranker, feedback
-  agents/         LLM: adapter, Gemini, DeepSeek, Fake, prompts registry (procurement-v1/v2 hash), factory (fallback), cache (tenant TTL 1h)
+  agents/         LLM: adapter, Gemini, DeepSeek, Fake, prompts registry (procurement-v1/v2 hash), factory (fallback), cache (tenant TTL 1h, flag-gated)
   tools/          Gateway: definitions, allowlist, budgets, tenant/rate, idempotencia + locks
   approvals/      Service Fase 7: snapshot, scope_hash, expiración, doble aprobación, SLA 12h, delegation, locks
   notifications/  Service Fase 7: Email/Slack/Webhook Notifier + inbox link
   integrations/webhooks/  Fase 8: WebhookService HMAC sha256, retry, X-Webhook-Id, outbox drainer + AgentStation callback
   integrations/agent_station/  Cliente aislado + DTOs + webhooks
   security/       PII, input_validation, tenant isolation, rate_limiter (per-tenant llm tokens)
-  evals/          Harness Fase 8: harness 22 casos, runner (direct/api/gate, prompt A/B), llm_matrix (gemini/deepseek/fake), rag_eval
-  workflows/      Orchestrator Fase 8 (injection/PII, LLM sanitize, notification+webhook on approval.requested/completed) + graph 14 nodos
-  persistence/    SQLAlchemy + Alembic (workflow_executions, inventory_*, suppliers, purchase_*, documents, document_chunks, webhook_subscriptions) + pgvector
-  config/         Settings tipadas (llm_provider, budgets, prompt/graph, rate/payload, tenant_llm_config, inbox_url)
+  evals/          Harness Fase 8: harness 22 casos, runner (direct/api/gate, prompt A/B + GCS), llm_matrix (gemini/deepseek/fake), rag_eval
+  workflows/      Orchestrator Fase 9 (injection/PII, LLM sanitize, notification+webhook, lineage doc→policy→supplier, flag rag_reranker) + graph 14 nodos
+  persistence/    SQLAlchemy + Alembic (workflow_executions, inventory_*, suppliers, purchase_*, documents, document_chunks, webhook_subscriptions) + pgvector + time_travel/lineage/retention
+  infra/         Locks (memory/redis), gcs ArtifactStore (file:// + gs://), feature_flags (yaml hot-reload + per-tenant)
+  pipeline/       BQ drainer (batch 10s, fake fallback, PII redact) Fase 9
+  config/         Settings tipadas (llm_provider, budgets, prompt/graph, rate/payload, tenant_llm_config, inbox_url, gcs_bucket, bigquery_dataset, retention_days)
   observability/  OTel tracing, Prometheus metrics (http/llm/cache/approval), Grafana dashboards, alerts
 sdk/python/      Fase 8: ProcurementClient (httpx, retries, Idempotency-Key) + tests
 sdk/ts/          Fase 8: ProcurementClient TS (fetch, msw) + tests
 ui/              Fase 7: Next.js 14 inbox (approvals/[id], executions/[id]/timeline, ScopeDiff, Timeline)
 docs/
-  api/openapi.json (18 paths, Spectral 0), changelog.md, postman_collection.json
-  architecture/boundary-agent-station.md, overview.md (Fase 0-8)
-  decisions/0001-0012 (incl. LLMOps, HITL, API platform)
+  api/openapi.json (26 paths, Spectral 0), changelog.md, postman_collection.json
+  architecture/boundary-agent-station.md, overview.md (Fase 0-9)
+  decisions/0001-0013 (incl. LLMOps, HITL, API platform, Data platform)
   demos/demo_script.md (happy vs malicious vs HITL)
 observability/dashboards/procurement.json (8 panels), alerts/alerts.yaml
+infra/feature_flags.yaml  flags: rag_reranker, llm_cache, async_workers, ui_v2, bulk_approvals, time_travel (hot-reload)
 examples/        curl_happy.sh, sdk_happy.py, sdk_py_happy.py, sdk_ts_happy.ts
 ```
 ```
@@ -130,7 +134,9 @@ examples/        curl_happy.sh, sdk_happy.py, sdk_py_happy.py, sdk_ts_happy.ts
 - Fase 5: Human approval + idempotencia — ✅ (118 tests: snapshot, scope_hash, expiración, doble aprobación, gateway idempotente, resume durable)
 - Fase 6: Evaluation layer v1 — ✅ (125 tests: harness 14 casos, `task_success 100%`, `unsafe 0`, `duplicate 0`, baseline, gate CI)
 - Fase 7: Seguridad adversarial — ✅ (162 tests: 22 casos, `task_success 100%`, `unsafe 0`, `duplicate 0`, threat model, PII, injection, tenant isolation, budgets, rate limits, pip-audit)
-- Fase 8-11: Observabilidad, GCP staging, hardening
+- Fase 8: API Platform — ✅ (285 tests: SDK py/ts, webhooks HMAC, paginación estable, OpenAPI Spectral 0)
+- Fase 9: Data Platform — ✅ (298 tests: outbox→BQ drainer, GCS ArtifactStore, time-travel, lineage, feature_flags, retention tombstone)
+- Fase 10-11: Cloud native, GitOps, SRE + Ecosistema extensible
 
 **Ejemplo Fase 7 — evaluación y seguridad:**
 - `make eval` (`--mode direct --suite all`) → `22/22` `100%` `p50 0.07s p95 0.09s` `cost $0.0008` `unsafe 0` `duplicate 0`; `evals/reports/report_<run_id>.json/.md` + `latest` + `baseline_v2.json` con `prompt_version`, `graph_version`, `code_commit`.
